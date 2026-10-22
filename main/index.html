@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gemstone Cam</title>
+<style>
+  :root {
+    --bg: #f4f4f6; --card: #fff; --text: #1c1c22; --muted: #6b6b76; --line: #dedee4;
+    --accent: #5b4bd6; --accent-text: #fff; --good: #1f9d55; --bad: #d64545;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121216; --card: #1c1c22; --text: #ececf1; --muted: #9a9aa6; --line: #2e2e38;
+      --accent: #8b7cf6; --accent-text: #121216; --good: #3ecf7a; --bad: #f06a6a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 16px; display: grid; gap: 14px; }
+  header { display: flex; align-items: center; gap: 10px; }
+  h1 { font-size: 20px; margin: 0; flex: 1; }
+  h2 { font-size: 13px; margin: 0 0 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+  .dot.ok { background: var(--good); } .dot.bad { background: var(--bad); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+  .error { border-color: var(--bad); color: var(--bad); display: none; }
+  .view { position: relative; aspect-ratio: 4 / 3; background: #000; border-radius: 8px; overflow: hidden; }
+  .view img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .box { position: absolute; left: 25%; top: 25%; width: 50%; height: 50%;
+         border: 2px dashed rgba(255,255,255,.8); border-radius: 4px; pointer-events: none; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .hint { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--text);
+           border-radius: 8px; padding: 8px 14px; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+  button:disabled { opacity: .5; cursor: wait; }
+  input[type=text] { font: inherit; flex: 1; min-width: 140px; padding: 8px 10px; border-radius: 8px;
+                     border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+  .result { font-size: 28px; font-weight: 700; margin: 4px 0; min-height: 1.3em; }
+  .bar { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px 4px 10px; border-radius: 999px;
+          border: 1px solid var(--line); background: var(--bg); font-size: 14px; }
+  .chip b { font-weight: 600; cursor: pointer; }
+  .chip span { color: var(--muted); }
+  .chip button { padding: 0 6px; border: 0; background: none; color: var(--muted); font-size: 16px; }
+  details summary { cursor: pointer; font-weight: 600; }
+  .settings { display: grid; grid-template-columns: auto 1fr auto; gap: 8px 12px; align-items: center; margin-top: 12px; }
+  .settings output { min-width: 3ch; text-align: right; color: var(--muted); }
+  .settings input[type=range] { width: 100%; }
+</style>
+</head>
+<body>
+<main>
+  <header><h1>Gemstone Cam</h1><div class="dot" id="dot" title="connection"></div></header>
+
+  <div class="card error" id="error"></div>
+
+  <div class="card">
+    <div class="view"><img id="cam" alt="camera preview"><div class="box"></div></div>
+    <div class="row" style="margin-top:10px">
+      <button id="live">Pause preview</button>
+      <button id="save">Save photo</button>
+    </div>
+    <p class="hint">Only the stone inside the dashed box is measured. Keep the lighting and distance the same every time.</p>
+  </div>
+
+  <div class="card">
+    <h2>Identify</h2>
+    <div class="result" id="result">&mdash;</div>
+    <div class="bar"><div id="conf"></div></div>
+    <p class="hint" id="detail">Teach some stones first, then press Identify (or the BOOT button on the board).</p>
+    <div class="row" style="margin-top:10px"><button class="primary" id="identify">Identify</button></div>
+  </div>
+
+  <div class="card">
+    <h2>Teach</h2>
+    <div class="row">
+      <input type="text" id="label" list="known" placeholder="Stone name, e.g. amethyst" maxlength="23">
+      <datalist id="known"></datalist>
+      <button class="primary" id="teach">Teach</button>
+    </div>
+    <p class="hint">Teach each stone 5&ndash;10 times, turning it a little between presses. Also teach "empty" with nothing in the box.</p>
+    <div class="chips" id="labels"></div>
+    <div class="row" style="margin-top:10px"><button id="forgetAll">Forget everything</button></div>
+  </div>
+
+  <div class="card">
+    <details>
+      <summary>Camera settings</summary>
+      <p class="hint">Set these up before teaching. Turning off auto white balance and auto exposure keeps colours consistent between teaching and identifying. Settings are remembered after a reboot.</p>
+      <div class="settings" id="settings"></div>
+    </details>
+  </div>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+let live = true, busy = false, lastBlob = null, lastUrl = null, saved = 0;
+
+const SETTINGS = [
+  ["awb", "Auto white balance", "check"],
+  ["wb_mode", "White balance preset", "select", ["Auto", "Sunny", "Cloudy", "Office", "Home"]],
+  ["aec", "Auto exposure", "check"],
+  ["aec_value", "Exposure", "range", 0, 1200],
+  ["ae_level", "Exposure bias", "range", -2, 2],
+  ["agc", "Auto gain", "check"],
+  ["agc_gain", "Gain", "range", 0, 30],
+  ["brightness", "Brightness", "range", -2, 2],
+  ["contrast", "Contrast", "range", -2, 2],
+  ["saturation", "Saturation", "range", -2, 2],
+  ["quality", "JPEG quality (lower = better)", "range", 4, 40],
+  ["vflip", "Flip vertically", "check"],
+  ["hmirror", "Mirror", "check"],
+];
+
+function showError(msg) {
+  $("#error").textContent = msg || "";
+  $("#error").style.display = msg ? "block" : "none";
+}
+
+function setConnected(ok) {
+  $("#dot").className = "dot " + (ok ? "ok" : "bad");
+}
+
+async function frame() {
+  if (live && !busy) {
+    try {
+      const r = await fetch("/capture?t=" + Date.now());
+      if (!r.ok) throw new Error((await r.json()).error);
+      lastBlob = await r.blob();
+      const url = URL.createObjectURL(lastBlob);
+      $("#cam").src = url;
+      if (lastUrl) URL.revokeObjectURL(lastUrl);
+      lastUrl = url;
+      setConnected(true);
+    } catch (e) {
+      setConnected(false);
+      setTimeout(frame, 1500);
+      return;
+    }
+  }
+  setTimeout(frame, live && !busy ? 120 : 300);
+}
+
+async function post(path) {
+  busy = true;
+  document.querySelectorAll("button").forEach(b => b.disabled = true);
+  try {
+    const r = await fetch(path, { method: "POST" });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    return j;
+  } finally {
+    busy = false;
+    document.querySelectorAll("button").forEach(b => b.disabled = false);
+  }
+}
+
+function renderLabels(list) {
+  const box = $("#labels");
+  box.innerHTML = "";
+  $("#known").innerHTML = "";
+  for (const { label, count } of list) {
+    const chip = document.createElement("div");
+    chip.className = "chip";
+    chip.innerHTML = "<b></b><span></span><button title='forget'>&times;</button>";
+    chip.querySelector("b").textContent = label;
+    chip.querySelector("span").textContent = count;
+    chip.querySelector("b").onclick = () => { $("#label").value = label; };
+    chip.querySelector("button").onclick = async () => {
+      if (!confirm(`Forget all ${count} samples of "${label}"?`)) return;
+      try { renderLabels((await post("/forget?label=" + encodeURIComponent(label))).labels); }
+      catch (e) { alert(e.message); }
+    };
+    box.appendChild(chip);
+    const opt = document.createElement("option");
+    opt.value = label;
+    $("#known").appendChild(opt);
+  }
+}
+
+$("#identify").onclick = async () => {
+  try {
+    const r = await post("/identify");
+    $("#result").textContent = r.label;
+    $("#conf").style.width = Math.round(r.confidence * 100) + "%";
+    $("#detail").textContent = `${Math.round(r.confidence * 100)}% sure` +
+      (r.runner_up ? `, next guess: ${r.runner_up}` : "") +
+      ` · distance ${r.distance.toFixed(3)} · ${r.ms} ms`;
+  } catch (e) {
+    $("#result").textContent = "—";
+    $("#conf").style.width = "0";
+    $("#detail").textContent = e.message;
+  }
+};
+
+async function teach() {
+  const label = $("#label").value.trim();
+  if (!label) { $("#label").focus(); return; }
+  try { renderLabels((await post("/teach?label=" + encodeURIComponent(label))).labels); }
+  catch (e) { alert(e.message); }
+}
+$("#teach").onclick = teach;
+$("#label").addEventListener("keydown", e => { if (e.key === "Enter") teach(); });
+
+$("#forgetAll").onclick = async () => {
+  if (!confirm("Forget every taught stone?")) return;
+  try { renderLabels((await post("/forget?all=1")).labels); }
+  catch (e) { alert(e.message); }
+};
+
+$("#live").onclick = () => {
+  live = !live;
+  $("#live").textContent = live ? "Pause preview" : "Resume preview";
+};
+
+$("#save").onclick = () => {
+  if (!lastBlob) return;
+  const name = ($("#label").value.trim() || "photo").replace(/[^\w-]+/g, "_");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(lastBlob);
+  a.download = `${name}_${String(++saved).padStart(3, "0")}.jpg`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
+
+function buildSettings(values) {
+  const box = $("#settings");
+  box.innerHTML = "";
+  for (const [name, title, kind, a, b] of SETTINGS) {
+    const lab = document.createElement("label");
+    lab.textContent = title;
+    lab.htmlFor = "s_" + name;
+    let input, out = document.createElement("output");
+    if (kind === "check") {
+      input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = !!values[name];
+    } else if (kind === "select") {
+      input = document.createElement("select");
+      a.forEach((t, i) => input.add(new Option(t, i)));
+      input.value = values[name];
+    } else {
+      input = document.createElement("input");
+      input.type = "range";
+      input.min = a; input.max = b; input.value = values[name];
+      out.textContent = values[name];
+      input.oninput = () => { out.textContent = input.value; };
+    }
+    input.id = "s_" + name;
+    input.onchange = async () => {
+      const val = kind === "check" ? (input.checked ? 1 : 0) : input.value;
+      const r = await fetch(`/control?var=${name}&val=${val}`);
+      if (!r.ok) alert((await r.json()).error);
+    };
+    box.append(lab, input, out);
+  }
+}
+
+(async () => {
+  try {
+    const s = await (await fetch("/status")).json();
+    showError(s.camera_ok ? "" : s.error);
+    buildSettings(s.settings);
+    renderLabels(s.labels);
+    setConnected(true);
+  } catch (e) {
+    showError("Can't reach the board. Are you on its WiFi?");
+  }
+  frame();
+})();
+</script>
+</body>
+</html>

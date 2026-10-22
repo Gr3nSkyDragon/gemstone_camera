@@ -1,0 +1,12 @@
+# Build output and downloaded components (restored automatically on build)
+build/
+managed_components/
+
+# Generated from sdkconfig.defaults; also holds your WiFi password if you set one
+sdkconfig
+sdkconfig.old
+
+# Logs and collected photos
+*-log.txt
+dataset/
+__pycache__/

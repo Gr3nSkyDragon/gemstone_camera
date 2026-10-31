@@ -117,7 +117,8 @@ static void button_task(void *arg)
             gem_result_t r;
             esp_err_t err = gem_identify_now(&r);
             if (err == ESP_ERR_NOT_FOUND) {
-                ESP_LOGW(TAG, "nothing taught yet - use the web page to teach some stones");
+                ESP_LOGW(TAG, "no %s samples yet - teach some stones or switch mode on the web page",
+                         gem_bank_name(gem_mode()));
             } else if (err != ESP_OK) {
                 ESP_LOGE(TAG, "identify failed: %s", esp_err_to_name(err));
             }
@@ -146,7 +147,7 @@ void app_main(void)
 
     wifi_start();
     ESP_ERROR_CHECK(gem_web_start());
-    xTaskCreate(button_task, "button", 4096, NULL, 5, NULL);
+    xTaskCreate(button_task, "button", 6144, NULL, 5, NULL);
 
     // Repeat the problem so a serial monitor opened late still sees it
     while (!gem_camera_ok()) {

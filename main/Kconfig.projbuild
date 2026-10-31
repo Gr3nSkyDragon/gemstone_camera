@@ -27,6 +27,20 @@ menu "Gemstone Cam"
             ALIENTEK-style modules (no XCLK pin on the header) clock themselves.
             For modules that do have an XCLK pin, wire it to GPIO 15 and set 15.
 
+    config GEMCAM_PWDN_GPIO
+        int "Camera PWDN pin (-1 = tied to GND)"
+        range -1 48
+        default 14
+        help
+            Lets the ESP32 power-cycle the camera when it starts up in a bad state.
+
+    config GEMCAM_RESET_GPIO
+        int "Camera RST pin (-1 = tied to 3.3V)"
+        range -1 48
+        default 21
+        help
+            Lets the ESP32 hard-reset the camera when it starts up in a bad state.
+
     config GEMCAM_XCLK_MHZ
         int "Camera XCLK (MHz)"
         range 5 20

@@ -12,9 +12,13 @@
 static const char *TAG = "camera";
 
 // Same wiring as the ESP32-S3-EYE, so stock Arduino camera examples also work
-// with CAMERA_MODEL_ESP32S3_EYE. PWDN is tied to GND and RESET to 3.3V.
-// ALIENTEK-style modules have their own oscillator, so XCLK defaults to unused.
+// with CAMERA_MODEL_ESP32S3_EYE. ALIENTEK-style modules have their own
+// oscillator, so XCLK defaults to unused.
 #define PIN_XCLK  CONFIG_GEMCAM_XCLK_GPIO
+// Driving PWDN and RST lets us hard-reset a sensor that powered up in a bad
+// state; tied to GND/3.3V instead, only unplugging the board recovers it.
+#define PIN_PWDN  CONFIG_GEMCAM_PWDN_GPIO
+#define PIN_RESET CONFIG_GEMCAM_RESET_GPIO
 #define PIN_SIOD  4
 #define PIN_SIOC  5
 #define PIN_D7    16  // Y9
@@ -28,6 +32,10 @@ static const char *TAG = "camera";
 #define PIN_VSYNC 6
 #define PIN_HREF  7
 #define PIN_PCLK  13
+
+#define START_ATTEMPTS 4
+// Consecutive failed grabs before the camera is restarted automatically
+#define GRAB_FAILS_BEFORE_RESTART 2
 
 #define SETTINGS_PART "gemdata"
 #define SETTINGS_NS   "cam"
@@ -61,6 +69,7 @@ static SemaphoreHandle_t s_lock;
 static bool s_ok;
 static char s_error[256] = "Camera not started";
 static int s_values[CTL_COUNT];
+static int s_grab_fails;
 
 // ---- wiring diagnosis (runs only when the camera fails to start) -------------
 
@@ -93,6 +102,18 @@ static void diagnose_sccb(void)
     const int sda = line_state(PIN_SIOD), scl = line_state(PIN_SIOC);
     ESP_LOGW(TAG, "diag: SDA (GPIO %d) is %s", PIN_SIOD, line_text(sda));
     ESP_LOGW(TAG, "diag: SCL (GPIO %d) is %s", PIN_SIOC, line_text(scl));
+
+    // Released for a moment: a pull resistor on the camera board shows the wire reaches it
+    const struct { const char *name; int pin; } ctl[] = {{"PWDN", PIN_PWDN}, {"RST", PIN_RESET}};
+    for (int i = 0; i < 2; i++) {
+        if (ctl[i].pin >= 0) {
+            const int st = line_state(ctl[i].pin);
+            ESP_LOGW(TAG, "diag: %s (GPIO %d) released: %s", ctl[i].name, ctl[i].pin,
+                     st == 1 ? "pulled HIGH by the camera board"
+                     : st == 0 ? "pulled LOW by the camera board"
+                     : "floating (no pull resistor seen, so can't tell if the wire reaches it)");
+        }
+    }
 
     const i2c_port_t port = I2C_NUM_1;
     const i2c_config_t c = {
@@ -151,9 +172,18 @@ static void diagnose_sccb(void)
                  "if they're right, the module may need a clock on XCLK.",
                  sda == 1 ? "pulled up" : sda == 2 ? "floating" : "held low",
                  scl == 1 ? "pulled up" : scl == 2 ? "floating" : "held low");
+    } else if (pid == OV2640_PID && (PIN_PWDN >= 0 || PIN_RESET >= 0)) {
+        // It only answered once PWDN/RST were released above, so driving them is what silenced it
+        snprintf(s_error, sizeof(s_error),
+                 "The camera answers when PWDN/RST are let go, but not while the ESP32 drives them. "
+                 "Those two wires are probably swapped or on the wrong pins: PWDN->GPIO %d, RST->GPIO %d.",
+                 PIN_PWDN, PIN_RESET);
+    } else if (pid == OV2640_PID) {
+        snprintf(s_error, sizeof(s_error),
+                 "The camera answered on a second try. Press Restart camera.");
     } else {
         snprintf(s_error, sizeof(s_error),
-                 "Something answers on SDA/SCL (%s) but it isn't a supported camera "
+                 "Something answers on SDA/SCL (%s) but it isn't an OV2640 "
                  "(PID 0x%02x). See the serial log.", found + 1, pid);
     }
 }
@@ -214,12 +244,43 @@ static void load_saved(sensor_t *s)
     nvs_close(h);
 }
 
-esp_err_t gem_camera_init(void)
+// Holds the sensor powered down and in reset, then releases it. Longer each
+// attempt, because a sensor that browned out sometimes needs a while.
+static void hard_reset(int attempt)
 {
-    s_lock = xSemaphoreCreateMutex();
+    if (PIN_PWDN < 0 && PIN_RESET < 0) {
+        vTaskDelay(pdMS_TO_TICKS(200 * attempt));
+        return;
+    }
+    const int pins[2] = {PIN_PWDN, PIN_RESET};
+    for (int i = 0; i < 2; i++) {
+        if (pins[i] >= 0) {
+            gpio_reset_pin(pins[i]);
+            gpio_set_direction(pins[i], GPIO_MODE_OUTPUT);
+        }
+    }
+    if (PIN_PWDN >= 0) {
+        gpio_set_level(PIN_PWDN, 1);   // power down
+    }
+    if (PIN_RESET >= 0) {
+        gpio_set_level(PIN_RESET, 0);  // hold in reset
+    }
+    vTaskDelay(pdMS_TO_TICKS(100 + 150 * attempt));
+    if (PIN_PWDN >= 0) {
+        gpio_set_level(PIN_PWDN, 0);
+    }
+    vTaskDelay(pdMS_TO_TICKS(20));
+    if (PIN_RESET >= 0) {
+        gpio_set_level(PIN_RESET, 1);
+    }
+    vTaskDelay(pdMS_TO_TICKS(50));
+}
 
+// One full start: driver init, settings, and a first frame. Cleans up on failure.
+static esp_err_t start_once(bool diagnose)
+{
     camera_config_t cfg = {
-        .pin_pwdn = -1,
+        .pin_pwdn = -1,   // handled by hard_reset()
         .pin_reset = -1,
         .pin_xclk = PIN_XCLK,
         .pin_sccb_sda = PIN_SIOD,
@@ -243,9 +304,10 @@ esp_err_t gem_camera_init(void)
 
     esp_err_t err = esp_camera_init(&cfg);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "camera init failed (%s); checking the wiring...", esp_err_to_name(err));
-        diagnose_sccb();
-        ESP_LOGE(TAG, "%s", s_error);
+        ESP_LOGW(TAG, "camera init failed (%s)", esp_err_to_name(err));
+        if (diagnose) {
+            diagnose_sccb();
+        }
         return err;
     }
 
@@ -268,15 +330,79 @@ esp_err_t gem_camera_init(void)
         snprintf(s_error, sizeof(s_error),
                  "Sensor found but no frames arrive. Check VSYNC->GPIO6, HREF->GPIO7, "
                  "PCLK->GPIO13 and D0-D7.");
-        ESP_LOGE(TAG, "%s", s_error);
+        ESP_LOGW(TAG, "no frames from the sensor");
+        esp_camera_deinit();
         return ESP_ERR_TIMEOUT;
     }
     ESP_LOGI(TAG, "first frame: %ux%u, %u bytes", fb->width, fb->height, (unsigned)fb->len);
     esp_camera_fb_return(fb);
-
-    s_ok = true;
-    s_error[0] = '\0';
     return ESP_OK;
+}
+
+static esp_err_t start_with_retries(void)
+{
+    esp_err_t err = ESP_FAIL;
+    for (int attempt = 1; attempt <= START_ATTEMPTS; attempt++) {
+        hard_reset(attempt);
+        err = start_once(attempt == START_ATTEMPTS);
+        if (err == ESP_OK) {
+            if (attempt > 1) {
+                ESP_LOGI(TAG, "camera started on attempt %d", attempt);
+            }
+            s_ok = true;
+            s_grab_fails = 0;
+            s_error[0] = '\0';
+            return ESP_OK;
+        }
+        ESP_LOGW(TAG, "camera start attempt %d/%d failed", attempt, START_ATTEMPTS);
+    }
+    if (PIN_PWDN < 0 && PIN_RESET < 0) {
+        strlcat(s_error, " (PWDN/RST aren't wired to the ESP32, so it can't reset the camera; "
+                "see README.)", sizeof(s_error));
+    }
+    ESP_LOGE(TAG, "%s", s_error);
+    return err;
+}
+
+esp_err_t gem_camera_init(void)
+{
+    s_lock = xSemaphoreCreateMutex();
+    return start_with_retries();
+}
+
+esp_err_t gem_camera_restart(void)
+{
+    gem_camera_lock();
+    ESP_LOGW(TAG, "restarting the camera");
+    if (s_ok) {
+        esp_camera_deinit();
+    }
+    s_ok = false;
+    snprintf(s_error, sizeof(s_error), "Camera restarting...");
+    esp_err_t err = start_with_retries();
+    gem_camera_unlock();
+    return err;
+}
+
+camera_fb_t *gem_camera_grab(void)
+{
+    if (!s_ok) {
+        return NULL;
+    }
+    camera_fb_t *fb = esp_camera_fb_get();
+    if (fb) {
+        s_grab_fails = 0;
+        return fb;
+    }
+    if (++s_grab_fails >= GRAB_FAILS_BEFORE_RESTART) {
+        ESP_LOGW(TAG, "frames stopped arriving");
+        esp_camera_deinit();
+        s_ok = false;
+        if (start_with_retries() == ESP_OK) {
+            return esp_camera_fb_get();
+        }
+    }
+    return NULL;
 }
 
 bool gem_camera_ok(void) { return s_ok; }

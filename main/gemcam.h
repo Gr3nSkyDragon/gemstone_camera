@@ -34,10 +34,10 @@ int gem_camera_settings_json(char *buf, size_t len);
 #define GEM_MAX_LABELS 24
 
 typedef enum {
-    GEM_BANK_TRAINED,  // from a photo dataset (tools/train.py); not touched by the demo
-    GEM_BANK_LIVE,     // taught on the web page; wipe for a live demo
-    GEM_BANK_COUNT
-} gem_bank_t;
+    GEM_MODE_TRAINED,  // the Edge Impulse neural network (components/ei_model)
+    GEM_MODE_LIVE,     // color matching against samples taught on the web page
+    GEM_MODE_COUNT
+} gem_mode_t;
 
 typedef struct {
     float f[GEM_FEAT_N];
@@ -50,52 +50,50 @@ typedef struct {
 
 typedef struct {
     unsigned seq;         // increases with every identification
-    gem_bank_t bank;      // which samples were used
+    gem_mode_t mode;      // which method produced it
     char label[GEM_LABEL_LEN];
     float confidence;     // score of the winning label
-    float distance;       // its mean distance to its closest samples
     char runner_up[GEM_LABEL_LEN];  // "" if only one label exists
-    int ms;               // time spent capturing + matching
+    int ms;               // time spent capturing + identifying
     int nscores;
     gem_score_t scores[GEM_MAX_LABELS];  // every label, highest first
 } gem_result_t;
 
 esp_err_t gem_store_init(void);
 
-// Captures `frames` frames and averages their features. Takes the camera lock.
+// Captures `frames` frames and averages their color features. Takes the camera lock.
 esp_err_t gem_capture_features(int frames, gem_features_t *out);
 
 // Cleans a user-typed label in place; returns false if nothing usable is left
 bool gem_sanitize_label(char *label);
 
-// Which bank Identify uses (saved to flash)
-gem_bank_t gem_mode(void);
-esp_err_t gem_set_mode(gem_bank_t bank);
-const char *gem_bank_name(gem_bank_t bank);
-bool gem_bank_from_name(const char *name, gem_bank_t *out);
+// Which method Identify uses (saved to flash)
+gem_mode_t gem_mode(void);
+esp_err_t gem_set_mode(gem_mode_t mode);
+const char *gem_mode_name(gem_mode_t mode);
+bool gem_mode_from_name(const char *name, gem_mode_t *out);
 
-// Live bank
+// Live demo samples
 esp_err_t gem_teach(const char *label, const gem_features_t *f);
 // label == NULL forgets everything
 esp_err_t gem_forget(const char *label);
+// Returns false when nothing has been taught
+bool gem_identify_live(const gem_features_t *f, gem_result_t *out);
 
-// Trained bank: clear, add photos, then commit to save them
-esp_err_t gem_train_clear(void);
-esp_err_t gem_train_add_jpeg(const char *label, const uint8_t *jpg, size_t len);
-esp_err_t gem_train_commit(void);
-
-// Returns false when the bank is empty
-bool gem_identify(gem_bank_t bank, const gem_features_t *f, gem_result_t *out);
-// Capture + match with the current mode + remember + show;
-// ESP_ERR_NOT_FOUND when that bank is empty
+// Capture + identify with the current mode + remember + show;
+// ESP_ERR_NOT_FOUND when the live demo has nothing taught yet
 esp_err_t gem_identify_now(gem_result_t *out);
+// Runs the AI model once and logs the result and timing (first runs are slow)
+void gem_ai_warmup(void);
 // The most recent result from any source (web page or BOOT button)
 bool gem_last_result(gem_result_t *out);
 unsigned gem_result_seq(void);
 
-int gem_sample_count(gem_bank_t bank);
+int gem_live_count(void);
 // Writes [{"label":"x","count":n},...] into buf
-int gem_labels_json(gem_bank_t bank, char *buf, size_t len);
+int gem_live_labels_json(char *buf, size_t len);
+// Writes {"name":"...","version":n,"labels":[{"label":"x"},...]} into buf
+int gem_ai_info_json(char *buf, size_t len);
 int gem_result_json(const gem_result_t *r, char *buf, size_t len);
 
 // Prints the result to the serial console (and later, the SSD1306)

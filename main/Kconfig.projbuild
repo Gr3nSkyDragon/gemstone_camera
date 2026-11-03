@@ -19,6 +19,13 @@ menu "Gemstone Cam"
         string "Hotspot password (8+ characters)"
         default "gemstone1"
 
+    config GEMCAM_MODEL_NAME
+        string "Name shown for the trained AI model"
+        default "Gr3nSky Gemstone Cam"
+        help
+            Shown on the web page and in the start-up log. Leave empty to use the
+            Edge Impulse project name from the exported model.
+
     config GEMCAM_XCLK_GPIO
         int "Camera XCLK pin (-1 = module has its own oscillator)"
         range -1 48

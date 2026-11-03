@@ -1,16 +1,15 @@
-// Colour/texture features + nearest-neighbour matching against stored samples.
+// Identifies stones two ways, picked with the mode switch on the web page:
 //
-// This is the "classic computer vision" baseline: no neural network, it just
-// measures the colours in the middle of the picture and finds the most similar
-// stones it has been shown.
-//
-// Samples live in two banks so a live demo can't disturb the real training:
-//   trained  filled from a photo dataset by tools/train.py (dozens per stone)
-//   live     taught from the web page a few presses at a time; wipe at will
+//   trained  the Edge Impulse neural network in components/ei_model, trained
+//            online from the photo dataset. Fixed until the model is re-exported.
+//   live     classic computer vision: color/texture features of the middle of
+//            the picture, matched against samples taught on the web page a few
+//            presses at a time. Wipe and re-teach at will for a live demo.
 
 #include <ctype.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -20,6 +19,7 @@
 #include "jpeg_decoder.h"
 #include "nvs.h"
 #include "nvs_flash.h"
+#include "gem_ai.h"
 #include "gemcam.h"
 
 static const char *TAG = "gem";
@@ -28,11 +28,14 @@ static const char *TAG = "gem";
 #define STORE_NS   "gems"
 #define STORE_VER  "fver"
 #define STORE_MODE "mode"
+// "samples" is the key the earlier versions used, so earlier teaching is kept
+#define STORE_LIVE "samples"
 // Bump when the feature layout changes; old samples are then discarded
 #define FEATURE_VERSION 1
 
+#define LIVE_MAX 300
 // Each label's distance is the mean of its K closest samples
-#define K_NEIGHBOURS 3
+#define K_NEIGHBORS 3
 #define HUE_BINS 8
 
 typedef struct {
@@ -40,25 +43,16 @@ typedef struct {
     float f[GEM_FEAT_N];
 } sample_t;
 
-typedef struct {
-    const char *name;  // shown on the web page and used in the API
-    const char *key;   // NVS key
-    int max;
-    sample_t *s;
-    int count;
-} bank_t;
-
-static bank_t s_banks[GEM_BANK_COUNT] = {
-    [GEM_BANK_TRAINED] = {.name = "trained", .key = "trained", .max = 1000},
-    // "samples" is the key the single-bank alpha used, so earlier teaching is kept
-    [GEM_BANK_LIVE]    = {.name = "live",    .key = "samples", .max = 300},
+static const char *MODE_NAMES[GEM_MODE_COUNT] = {
+    [GEM_MODE_TRAINED] = "trained",
+    [GEM_MODE_LIVE] = "live",
 };
 
 // Feature layout (all roughly 0..1):
 //   0-2   mean R, G, B
 //   3-5   standard deviation of R, G, B  (texture, banding, sparkle)
-//   6-13  hue histogram of coloured pixels, 8 bins of 45 degrees
-//   14    fraction of grey/white/black pixels
+//   6-13  hue histogram of colored pixels, 8 bins of 45 degrees
+//   14    fraction of gray/white/black pixels
 //   15    mean saturation
 static const float WEIGHTS[GEM_FEAT_N] = {
     2, 2, 2,
@@ -68,28 +62,30 @@ static const float WEIGHTS[GEM_FEAT_N] = {
     1,
 };
 
-static SemaphoreHandle_t s_lock;   // guards the banks, mode and last result
-static gem_bank_t s_mode = GEM_BANK_LIVE;
+static SemaphoreHandle_t s_lock;   // guards the live samples, mode and last result
+static sample_t *s_live;
+static int s_live_count;
+static gem_mode_t s_mode = GEM_MODE_TRAINED;
 static gem_result_t s_last;
 static unsigned s_seq;
 
 static uint8_t *s_rgb;             // decode buffer; only used under the camera lock
 static size_t s_rgb_size;
+static int s_rgb_w, s_rgb_h;
 
 // ---- storage ----------------------------------------------------------------
 
-static esp_err_t save_bank(gem_bank_t b)
+static esp_err_t save_live(void)
 {
-    const bank_t *bk = &s_banks[b];
     nvs_handle_t h;
     esp_err_t err = nvs_open_from_partition(STORE_PART, STORE_NS, NVS_READWRITE, &h);
     if (err != ESP_OK) {
         return err;
     }
-    if (bk->count > 0) {
-        err = nvs_set_blob(h, bk->key, bk->s, bk->count * sizeof(sample_t));
+    if (s_live_count > 0) {
+        err = nvs_set_blob(h, STORE_LIVE, s_live, s_live_count * sizeof(sample_t));
     } else {
-        err = nvs_erase_key(h, bk->key);
+        err = nvs_erase_key(h, STORE_LIVE);
         if (err == ESP_ERR_NVS_NOT_FOUND) {
             err = ESP_OK;
         }
@@ -102,7 +98,7 @@ static esp_err_t save_bank(gem_bank_t b)
     }
     nvs_close(h);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "saving the %s samples failed: %s", bk->name, esp_err_to_name(err));
+        ESP_LOGE(TAG, "saving the live samples failed: %s", esp_err_to_name(err));
     }
     return err;
 }
@@ -120,12 +116,12 @@ esp_err_t gem_store_init(void)
         return err;
     }
 
-    for (int b = 0; b < GEM_BANK_COUNT; b++) {
-        s_banks[b].s = heap_caps_calloc(s_banks[b].max, sizeof(sample_t), MALLOC_CAP_SPIRAM);
-        if (!s_banks[b].s) {
-            return ESP_ERR_NO_MEM;
-        }
+    s_live = heap_caps_calloc(LIVE_MAX, sizeof(sample_t), MALLOC_CAP_SPIRAM);
+    if (!s_live) {
+        return ESP_ERR_NO_MEM;
     }
+
+    ESP_LOGI(TAG, "AI model: %s v%d, %d stones", gem_ai_name(), gem_ai_version(), gem_ai_label_count());
 
     nvs_handle_t h;
     if (nvs_open_from_partition(STORE_PART, STORE_NS, NVS_READONLY, &h) != ESP_OK) {
@@ -135,33 +131,28 @@ esp_err_t gem_store_init(void)
     uint8_t ver = 0;
     nvs_get_u8(h, STORE_VER, &ver);
     if (ver != 0 && ver != FEATURE_VERSION) {
-        ESP_LOGW(TAG, "samples are from feature version %u; please re-teach", ver);
+        ESP_LOGW(TAG, "live samples are from feature version %u; please re-teach", ver);
     } else {
-        for (int b = 0; b < GEM_BANK_COUNT; b++) {
-            bank_t *bk = &s_banks[b];
-            size_t size = bk->max * sizeof(sample_t);
-            if (nvs_get_blob(h, bk->key, bk->s, &size) == ESP_OK) {
-                bk->count = size / sizeof(sample_t);
-            }
+        size_t size = LIVE_MAX * sizeof(sample_t);
+        if (nvs_get_blob(h, STORE_LIVE, s_live, &size) == ESP_OK) {
+            s_live_count = size / sizeof(sample_t);
         }
     }
     uint8_t mode;
-    if (nvs_get_u8(h, STORE_MODE, &mode) == ESP_OK && mode < GEM_BANK_COUNT) {
+    if (nvs_get_u8(h, STORE_MODE, &mode) == ESP_OK && mode < GEM_MODE_COUNT) {
         s_mode = mode;
-    } else if (s_banks[GEM_BANK_TRAINED].count > 0) {
-        s_mode = GEM_BANK_TRAINED;
     }
     nvs_close(h);
-    ESP_LOGI(TAG, "loaded %d trained and %d live samples; using %s",
-             s_banks[GEM_BANK_TRAINED].count, s_banks[GEM_BANK_LIVE].count, s_banks[s_mode].name);
+    ESP_LOGI(TAG, "%d live samples; using the %s mode", s_live_count, MODE_NAMES[s_mode]);
     return ESP_OK;
 }
 
-// ---- features ---------------------------------------------------------------
+// ---- image decoding and features --------------------------------------------
 
-static esp_err_t features_from_jpeg(const uint8_t *jpg, size_t len, gem_features_t *out)
+// Decodes into s_rgb at 1/4 scale: a 640x480 frame becomes 160x120, enough for
+// color statistics and more than the AI model's 96x96 input
+static esp_err_t decode(const uint8_t *jpg, size_t len)
 {
-    // 1/4 scale: a 640x480 frame decodes to 160x120, plenty for colour statistics
     esp_jpeg_image_cfg_t cfg = {
         .indata = (uint8_t *)jpg,
         .indata_size = len,
@@ -184,16 +175,19 @@ static esp_err_t features_from_jpeg(const uint8_t *jpg, size_t len, gem_features
     cfg.outbuf = s_rgb;
     cfg.outbuf_size = s_rgb_size;
     err = esp_jpeg_decode(&cfg, &img);
-    if (err != ESP_OK) {
-        return err;
-    }
+    s_rgb_w = img.width;
+    s_rgb_h = img.height;
+    return err;
+}
 
-    // Only the middle half of the picture (the box drawn on the web page)
-    const int w = img.width, h = img.height;
+// Color/texture features of the middle half of s_rgb (the box on the web page)
+static void features_from_rgb(gem_features_t *out)
+{
+    const int w = s_rgb_w, h = s_rgb_h;
     const int x0 = w / 4, x1 = w * 3 / 4, y0 = h / 4, y1 = h * 3 / 4;
 
     double sum[3] = {0}, sq[3] = {0}, sat_sum = 0;
-    int hist[HUE_BINS] = {0}, grey = 0, n = 0;
+    int hist[HUE_BINS] = {0}, gray = 0, n = 0;
 
     for (int y = y0; y < y1; y++) {
         const uint8_t *p = s_rgb + (y * w + x0) * 3;
@@ -208,7 +202,7 @@ static esp_err_t features_from_jpeg(const uint8_t *jpg, size_t len, gem_features
             sat_sum += sat;
 
             if (sat < 0.25f || mx < 30) {
-                grey++;
+                gray++;
             } else {
                 const float d = mx - mn;
                 float hue;  // 0..6
@@ -238,9 +232,8 @@ static esp_err_t features_from_jpeg(const uint8_t *jpg, size_t len, gem_features
     for (int i = 0; i < HUE_BINS; i++) {
         out->f[6 + i] = (float)hist[i] / n;
     }
-    out->f[14] = (float)grey / n;
+    out->f[14] = (float)gray / n;
     out->f[15] = sat_sum / n;
-    return ESP_OK;
 }
 
 esp_err_t gem_capture_features(int frames, gem_features_t *out)
@@ -264,13 +257,14 @@ esp_err_t gem_capture_features(int frames, gem_features_t *out)
             err = ESP_ERR_TIMEOUT;
             break;
         }
-        gem_features_t one;
-        err = features_from_jpeg(fb->buf, fb->len, &one);
+        err = decode(fb->buf, fb->len);
         esp_camera_fb_return(fb);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "skipping a bad frame: %s", esp_err_to_name(err));
             continue;
         }
+        gem_features_t one;
+        features_from_rgb(&one);
         for (int k = 0; k < GEM_FEAT_N; k++) {
             out->f[k] += one.f[k];
         }
@@ -287,38 +281,40 @@ esp_err_t gem_capture_features(int frames, gem_features_t *out)
     return ESP_OK;
 }
 
-// ---- banks and mode -----------------------------------------------------------
+// ---- mode -----------------------------------------------------------------------
 
-const char *gem_bank_name(gem_bank_t b) { return s_banks[b].name; }
+const char *gem_mode_name(gem_mode_t m) { return MODE_NAMES[m]; }
 
-bool gem_bank_from_name(const char *name, gem_bank_t *out)
+bool gem_mode_from_name(const char *name, gem_mode_t *out)
 {
-    for (int b = 0; b < GEM_BANK_COUNT; b++) {
-        if (strcmp(name, s_banks[b].name) == 0) {
-            *out = b;
+    for (int m = 0; m < GEM_MODE_COUNT; m++) {
+        if (strcmp(name, MODE_NAMES[m]) == 0) {
+            *out = m;
             return true;
         }
     }
     return false;
 }
 
-gem_bank_t gem_mode(void) { return s_mode; }
+gem_mode_t gem_mode(void) { return s_mode; }
 
-esp_err_t gem_set_mode(gem_bank_t b)
+esp_err_t gem_set_mode(gem_mode_t m)
 {
-    s_mode = b;
+    s_mode = m;
     nvs_handle_t h;
     esp_err_t err = nvs_open_from_partition(STORE_PART, STORE_NS, NVS_READWRITE, &h);
     if (err == ESP_OK) {
-        err = nvs_set_u8(h, STORE_MODE, b);
+        err = nvs_set_u8(h, STORE_MODE, m);
         if (err == ESP_OK) {
             err = nvs_commit(h);
         }
         nvs_close(h);
     }
-    ESP_LOGI(TAG, "now identifying with the %s samples", s_banks[b].name);
+    ESP_LOGI(TAG, "now identifying with the %s mode", MODE_NAMES[m]);
     return err;
 }
+
+// ---- live demo samples ------------------------------------------------------------
 
 bool gem_sanitize_label(char *label)
 {
@@ -337,32 +333,23 @@ bool gem_sanitize_label(char *label)
     return w > label;
 }
 
-static esp_err_t add_sample(gem_bank_t b, const char *label, const gem_features_t *f)
-{
-    bank_t *bk = &s_banks[b];
-    if (bk->count >= bk->max) {
-        return ESP_ERR_NO_MEM;
-    }
-    sample_t *s = &bk->s[bk->count];
-    strlcpy(s->label, label, sizeof(s->label));
-    memcpy(s->f, f->f, sizeof(s->f));
-    bk->count++;
-    return ESP_OK;
-}
-
 esp_err_t gem_teach(const char *label, const gem_features_t *f)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    esp_err_t err = add_sample(GEM_BANK_LIVE, label, f);
-    if (err == ESP_OK) {
-        err = save_bank(GEM_BANK_LIVE);
+    esp_err_t err = ESP_ERR_NO_MEM;
+    if (s_live_count < LIVE_MAX) {
+        sample_t *s = &s_live[s_live_count++];
+        strlcpy(s->label, label, sizeof(s->label));
+        memcpy(s->f, f->f, sizeof(s->f));
+        err = save_live();
         if (err != ESP_OK) {
-            s_banks[GEM_BANK_LIVE].count--;
+            s_live_count--;
         }
     }
+    const int n = s_live_count;
     xSemaphoreGive(s_lock);
     if (err == ESP_OK) {
-        ESP_LOGI(TAG, "taught '%s' (%d live samples)", label, s_banks[GEM_BANK_LIVE].count);
+        ESP_LOGI(TAG, "taught '%s' (%d live samples)", label, n);
     }
     return err;
 }
@@ -370,56 +357,20 @@ esp_err_t gem_teach(const char *label, const gem_features_t *f)
 esp_err_t gem_forget(const char *label)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    bank_t *bk = &s_banks[GEM_BANK_LIVE];
     int w = 0;
-    for (int r = 0; r < bk->count; r++) {
-        if (label && strcmp(bk->s[r].label, label) != 0) {
-            bk->s[w++] = bk->s[r];
+    for (int r = 0; r < s_live_count; r++) {
+        if (label && strcmp(s_live[r].label, label) != 0) {
+            s_live[w++] = s_live[r];
         }
     }
-    ESP_LOGI(TAG, "forgot %d live samples of '%s'", bk->count - w, label ? label : "(all)");
-    bk->count = w;
-    esp_err_t err = save_bank(GEM_BANK_LIVE);
+    ESP_LOGI(TAG, "forgot %d live samples of '%s'", s_live_count - w, label ? label : "(all)");
+    s_live_count = w;
+    esp_err_t err = save_live();
     xSemaphoreGive(s_lock);
     return err;
 }
 
-esp_err_t gem_train_clear(void)
-{
-    xSemaphoreTake(s_lock, portMAX_DELAY);
-    s_banks[GEM_BANK_TRAINED].count = 0;
-    esp_err_t err = save_bank(GEM_BANK_TRAINED);
-    xSemaphoreGive(s_lock);
-    ESP_LOGI(TAG, "trained samples cleared");
-    return err;
-}
-
-esp_err_t gem_train_add_jpeg(const char *label, const uint8_t *jpg, size_t len)
-{
-    gem_features_t f;
-    gem_camera_lock();  // the decode buffer is shared with the camera path
-    esp_err_t err = features_from_jpeg(jpg, len, &f);
-    gem_camera_unlock();
-    if (err != ESP_OK) {
-        return err;
-    }
-    xSemaphoreTake(s_lock, portMAX_DELAY);
-    err = add_sample(GEM_BANK_TRAINED, label, &f);
-    xSemaphoreGive(s_lock);
-    return err;
-}
-
-esp_err_t gem_train_commit(void)
-{
-    xSemaphoreTake(s_lock, portMAX_DELAY);
-    esp_err_t err = save_bank(GEM_BANK_TRAINED);
-    const int n = s_banks[GEM_BANK_TRAINED].count;
-    xSemaphoreGive(s_lock);
-    ESP_LOGI(TAG, "saved %d trained samples", n);
-    return err;
-}
-
-// ---- identify -----------------------------------------------------------------
+// ---- identify -------------------------------------------------------------------
 
 static float distance(const float *a, const float *b)
 {
@@ -431,22 +382,41 @@ static float distance(const float *a, const float *b)
     return sqrtf(d);
 }
 
-bool gem_identify(gem_bank_t b, const gem_features_t *f, gem_result_t *out)
+// Sorts out->scores highest first and fills in the winner and runner-up
+static void finish_result(gem_result_t *out)
+{
+    for (int j = 1; j < out->nscores; j++) {
+        const gem_score_t sc = out->scores[j];
+        int k = j;
+        while (k > 0 && out->scores[k - 1].score < sc.score) {
+            out->scores[k] = out->scores[k - 1];
+            k--;
+        }
+        out->scores[k] = sc;
+    }
+    strlcpy(out->label, out->scores[0].label, sizeof(out->label));
+    out->confidence = out->scores[0].score;
+    out->runner_up[0] = '\0';
+    if (out->nscores > 1) {
+        strlcpy(out->runner_up, out->scores[1].label, sizeof(out->runner_up));
+    }
+}
+
+bool gem_identify_live(const gem_features_t *f, gem_result_t *out)
 {
     memset(out, 0, sizeof(*out));
-    out->bank = b;
+    out->mode = GEM_MODE_LIVE;
 
     struct {
         const char *label;
-        float d[K_NEIGHBOURS];  // closest first
+        float d[K_NEIGHBORS];  // closest first
         int n;
     } labs[GEM_MAX_LABELS];
     int nl = 0;
 
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    const bank_t *bk = &s_banks[b];
-    for (int i = 0; i < bk->count; i++) {
-        const char *lab = bk->s[i].label;
+    for (int i = 0; i < s_live_count; i++) {
+        const char *lab = s_live[i].label;
         int j = 0;
         while (j < nl && strcmp(labs[j].label, lab) != 0) {
             j++;
@@ -460,75 +430,118 @@ bool gem_identify(gem_bank_t b, const gem_features_t *f, gem_result_t *out)
             nl++;
         }
         // Keep this label's K closest distances, sorted
-        const float d = distance(f->f, bk->s[i].f);
-        int pos = labs[j].n < K_NEIGHBOURS ? labs[j].n++ : K_NEIGHBOURS;
+        const float d = distance(f->f, s_live[i].f);
+        int pos = labs[j].n < K_NEIGHBORS ? labs[j].n++ : K_NEIGHBORS;
         while (pos > 0 && labs[j].d[pos - 1] > d) {
-            if (pos < K_NEIGHBOURS) {
+            if (pos < K_NEIGHBORS) {
                 labs[j].d[pos] = labs[j].d[pos - 1];
             }
             pos--;
         }
-        if (pos < K_NEIGHBOURS) {
+        if (pos < K_NEIGHBORS) {
             labs[j].d[pos] = d;
         }
     }
 
-    if (nl == 0) {
-        xSemaphoreGive(s_lock);
-        return false;
-    }
-
-    // Closer labels get a bigger share: weight = 1 / distance^2, normalised to 100%
-    float dist[GEM_MAX_LABELS], total = 0;
+    // Closer labels get a bigger share: weight = 1 / distance^2, normalized to 100%
+    float total = 0;
     for (int j = 0; j < nl; j++) {
         float sum = 0;
         for (int k = 0; k < labs[j].n; k++) {
             sum += labs[j].d[k];
         }
-        dist[j] = sum / labs[j].n;
-        out->scores[j].score = 1.0f / (dist[j] * dist[j] + 1e-4f);
+        const float dist = sum / labs[j].n;
+        out->scores[j].score = 1.0f / (dist * dist + 1e-4f);
         total += out->scores[j].score;
         strlcpy(out->scores[j].label, labs[j].label, GEM_LABEL_LEN);
     }
     xSemaphoreGive(s_lock);
 
+    if (nl == 0) {
+        return false;
+    }
     for (int j = 0; j < nl; j++) {
         out->scores[j].score /= total;
     }
-    // Highest score first (insertion sort; there are only a handful of labels)
-    for (int j = 1; j < nl; j++) {
-        const gem_score_t sc = out->scores[j];
-        const float dj = dist[j];
-        int k = j;
-        while (k > 0 && out->scores[k - 1].score < sc.score) {
-            out->scores[k] = out->scores[k - 1];
-            dist[k] = dist[k - 1];
-            k--;
-        }
-        out->scores[k] = sc;
-        dist[k] = dj;
+    out->nscores = nl;
+    finish_result(out);
+    return true;
+}
+
+static esp_err_t identify_trained(gem_result_t *out)
+{
+    memset(out, 0, sizeof(*out));
+    out->mode = GEM_MODE_TRAINED;
+    if (!gem_camera_ok()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    float scores[GEM_MAX_LABELS];
+    int ai_ms = 0;
+
+    gem_camera_lock();
+    camera_fb_t *fb = gem_camera_grab();  // stale frame, see gem_capture_features()
+    if (fb) {
+        esp_camera_fb_return(fb);
+    }
+    fb = gem_camera_grab();
+    esp_err_t err = fb ? decode(fb->buf, fb->len) : ESP_ERR_TIMEOUT;
+    if (fb) {
+        esp_camera_fb_return(fb);
+    }
+    if (err == ESP_OK) {
+        err = gem_ai_classify(s_rgb, s_rgb_w, s_rgb_h, scores, &ai_ms);
+    }
+    gem_camera_unlock();
+    if (err != ESP_OK) {
+        return err;
     }
 
-    out->nscores = nl;
-    strlcpy(out->label, out->scores[0].label, sizeof(out->label));
-    out->confidence = out->scores[0].score;
-    out->distance = dist[0];
-    if (nl > 1) {
-        strlcpy(out->runner_up, out->scores[1].label, sizeof(out->runner_up));
+    const int n = gem_ai_label_count() < GEM_MAX_LABELS ? gem_ai_label_count() : GEM_MAX_LABELS;
+    for (int i = 0; i < n; i++) {
+        strlcpy(out->scores[i].label, gem_ai_label(i), GEM_LABEL_LEN);
+        out->scores[i].score = scores[i];
     }
-    return true;
+    out->nscores = n;
+    finish_result(out);
+    ESP_LOGI(TAG, "inference took %d ms", ai_ms);
+    return ESP_OK;
+}
+
+void gem_ai_warmup(void)
+{
+    gem_result_t *r = malloc(sizeof(*r));
+    if (!r) {
+        return;
+    }
+    // Twice: the first run sets things up, the second shows the normal speed
+    for (int i = 0; i < 2; i++) {
+        const int64_t t0 = esp_timer_get_time();
+        esp_err_t err = identify_trained(r);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "AI model test run failed: %s", esp_err_to_name(err));
+            break;
+        }
+        ESP_LOGI(TAG, "AI model test %d: sees '%s' (%.0f%%) in %lld ms", i + 1,
+                 r->label, r->confidence * 100, (esp_timer_get_time() - t0) / 1000);
+    }
+    free(r);
 }
 
 esp_err_t gem_identify_now(gem_result_t *out)
 {
     const int64_t t0 = esp_timer_get_time();
-    gem_features_t f;
-    esp_err_t err = gem_capture_features(3, &f);
+    esp_err_t err;
+    if (s_mode == GEM_MODE_TRAINED) {
+        err = identify_trained(out);
+    } else {
+        gem_features_t f;
+        err = gem_capture_features(3, &f);
+        if (err == ESP_OK && !gem_identify_live(&f, out)) {
+            err = ESP_ERR_NOT_FOUND;
+        }
+    }
     if (err != ESP_OK) {
         return err;
-    }
-    if (!gem_identify(s_mode, &f, out)) {
-        return ESP_ERR_NOT_FOUND;
     }
     out->ms = (esp_timer_get_time() - t0) / 1000;
 
@@ -553,29 +566,28 @@ unsigned gem_result_seq(void) { return s_seq; }
 
 // ---- reporting ----------------------------------------------------------------
 
-int gem_sample_count(gem_bank_t b) { return s_banks[b].count; }
+int gem_live_count(void) { return s_live_count; }
 
-int gem_labels_json(gem_bank_t b, char *buf, size_t len)
+int gem_live_labels_json(char *buf, size_t len)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    const bank_t *bk = &s_banks[b];
     int n = snprintf(buf, len, "[");
-    for (int i = 0; i < bk->count && n < (int)len; i++) {
+    for (int i = 0; i < s_live_count && n < (int)len; i++) {
         // Count each label once, at its first occurrence
         bool seen = false;
         for (int j = 0; j < i && !seen; j++) {
-            seen = strcmp(bk->s[j].label, bk->s[i].label) == 0;
+            seen = strcmp(s_live[j].label, s_live[i].label) == 0;
         }
         if (seen) {
             continue;
         }
         int count = 0;
-        for (int j = i; j < bk->count; j++) {
-            count += strcmp(bk->s[j].label, bk->s[i].label) == 0;
+        for (int j = i; j < s_live_count; j++) {
+            count += strcmp(s_live[j].label, s_live[i].label) == 0;
         }
         // Labels are sanitized, so they need no JSON escaping
         n += snprintf(buf + n, len - n, "%s{\"label\":\"%s\",\"count\":%d}",
-                      n > 1 ? "," : "", bk->s[i].label, count);
+                      n > 1 ? "," : "", s_live[i].label, count);
     }
     xSemaphoreGive(s_lock);
     if (n < (int)len) {
@@ -584,13 +596,26 @@ int gem_labels_json(gem_bank_t b, char *buf, size_t len)
     return n;
 }
 
+int gem_ai_info_json(char *buf, size_t len)
+{
+    // Edge Impulse labels are plain names; no JSON escaping needed
+    int n = snprintf(buf, len, "{\"name\":\"%s\",\"version\":%d,\"labels\":[",
+                     gem_ai_name(), gem_ai_version());
+    for (int i = 0; i < gem_ai_label_count() && n < (int)len; i++) {
+        n += snprintf(buf + n, len - n, "%s{\"label\":\"%s\"}", i ? "," : "", gem_ai_label(i));
+    }
+    if (n < (int)len) {
+        n += snprintf(buf + n, len - n, "]}");
+    }
+    return n;
+}
+
 int gem_result_json(const gem_result_t *r, char *buf, size_t len)
 {
     int n = snprintf(buf, len,
                      "{\"seq\":%u,\"mode\":\"%s\",\"label\":\"%s\",\"confidence\":%.3f,"
-                     "\"distance\":%.4f,\"runner_up\":\"%s\",\"ms\":%d,\"scores\":[",
-                     r->seq, s_banks[r->bank].name, r->label, r->confidence,
-                     r->distance, r->runner_up, r->ms);
+                     "\"runner_up\":\"%s\",\"ms\":%d,\"scores\":[",
+                     r->seq, MODE_NAMES[r->mode], r->label, r->confidence, r->runner_up, r->ms);
     for (int i = 0; i < r->nscores && n < (int)len; i++) {
         n += snprintf(buf + n, len - n, "%s{\"label\":\"%s\",\"score\":%.3f}",
                       i ? "," : "", r->scores[i].label, r->scores[i].score);
@@ -604,7 +629,7 @@ int gem_result_json(const gem_result_t *r, char *buf, size_t len)
 void gem_show_result(const gem_result_t *r)
 {
     // TODO: also draw this on the SSD1306 once it's wired up
-    ESP_LOGI(TAG, "RESULT: %s  %.0f%%  (%s samples, distance %.3f%s%s, %d ms)",
-             r->label, r->confidence * 100, s_banks[r->bank].name, r->distance,
+    ESP_LOGI(TAG, "RESULT: %s  %.0f%%  (%s%s%s, %d ms)",
+             r->label, r->confidence * 100, MODE_NAMES[r->mode],
              r->runner_up[0] ? ", next: " : "", r->runner_up, r->ms);
 }

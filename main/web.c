@@ -10,7 +10,6 @@
 static const char *TAG = "web";
 
 #define JSON_BUF 8192
-#define MAX_UPLOAD (512 * 1024)
 
 extern const char index_html_start[] asm("_binary_index_html_start");
 extern const char index_html_end[] asm("_binary_index_html_end");
@@ -59,27 +58,25 @@ static esp_err_t send_error(httpd_req_t *req, const char *status, const char *ms
     return send_json(req, buf);
 }
 
-// {"mode":"live","trained":{"samples":n,"labels":[...]},"live":{...}}
-static int banks_json(char *buf, size_t len)
+// "mode":"live","trained":{"name":...,"labels":[...]},"live":{"samples":n,"labels":[...]}
+static int modes_json(char *buf, size_t len)
 {
-    int n = snprintf(buf, len, "\"mode\":\"%s\"", gem_bank_name(gem_mode()));
-    for (int b = 0; b < GEM_BANK_COUNT && n < (int)len; b++) {
-        n += snprintf(buf + n, len - n, ",\"%s\":{\"samples\":%d,\"labels\":",
-                      gem_bank_name(b), gem_sample_count(b));
-        n += gem_labels_json(b, buf + n, len - n);
-        n += snprintf(buf + n, len - n, "}");
-    }
+    int n = snprintf(buf, len, "\"mode\":\"%s\",\"trained\":", gem_mode_name(gem_mode()));
+    n += gem_ai_info_json(buf + n, len - n);
+    n += snprintf(buf + n, len - n, ",\"live\":{\"samples\":%d,\"labels\":", gem_live_count());
+    n += gem_live_labels_json(buf + n, len - n);
+    n += snprintf(buf + n, len - n, "}");
     return n;
 }
 
-static esp_err_t send_banks(httpd_req_t *req)
+static esp_err_t send_modes(httpd_req_t *req)
 {
     char *buf = malloc(JSON_BUF);
     if (!buf) {
         return httpd_resp_send_500(req);
     }
     int n = snprintf(buf, JSON_BUF, "{");
-    n += banks_json(buf + n, JSON_BUF - n);
+    n += modes_json(buf + n, JSON_BUF - n);
     snprintf(buf + n, JSON_BUF - n, "}");
     esp_err_t err = send_json(req, buf);
     free(buf);
@@ -145,7 +142,7 @@ static esp_err_t status_get(httpd_req_t *req)
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
                      gem_result_seq());
-    n += banks_json(buf + n, JSON_BUF - n);
+    n += modes_json(buf + n, JSON_BUF - n);
     n += snprintf(buf + n, JSON_BUF - n, ",\"settings\":");
     n += gem_camera_settings_json(buf + n, JSON_BUF - n);
     snprintf(buf + n, JSON_BUF - n, "}");
@@ -189,9 +186,7 @@ static esp_err_t identify_post(httpd_req_t *req)
     if (err == ESP_OK) {
         sent = send_result(req, r);
     } else if (err == ESP_ERR_NOT_FOUND) {
-        sent = send_error(req, "409 Conflict", gem_mode() == GEM_BANK_LIVE
-                          ? "Nothing taught yet - teach at least one stone first"
-                          : "No trained samples yet - run tools/train.py, or switch to Live demo");
+        sent = send_error(req, "409 Conflict", "Nothing taught yet - teach at least one stone first");
     } else {
         sent = send_error(req, "500 Internal Server Error",
                           gem_camera_ok() ? esp_err_to_name(err) : gem_camera_error());
@@ -215,15 +210,15 @@ static esp_err_t result_get(httpd_req_t *req)
 static esp_err_t mode_post(httpd_req_t *req)
 {
     char name[16];
-    gem_bank_t b;
-    if (!query_param(req, "set", name, sizeof(name)) || !gem_bank_from_name(name, &b)) {
+    gem_mode_t m;
+    if (!query_param(req, "set", name, sizeof(name)) || !gem_mode_from_name(name, &m)) {
         return send_error(req, "400 Bad Request", "set=trained or set=live");
     }
-    gem_set_mode(b);
-    return send_banks(req);
+    gem_set_mode(m);
+    return send_modes(req);
 }
 
-// ---- live bank --------------------------------------------------------------------
+// ---- live demo --------------------------------------------------------------------
 
 static esp_err_t teach_post(httpd_req_t *req)
 {
@@ -243,7 +238,7 @@ static esp_err_t teach_post(httpd_req_t *req)
         return send_error(req, "500 Internal Server Error",
                           gem_camera_ok() ? esp_err_to_name(err) : gem_camera_error());
     }
-    return send_banks(req);
+    return send_modes(req);
 }
 
 static esp_err_t forget_post(httpd_req_t *req)
@@ -257,61 +252,7 @@ static esp_err_t forget_post(httpd_req_t *req)
     } else {
         return send_error(req, "400 Bad Request", "Say which label to forget, or all=1");
     }
-    return send_banks(req);
-}
-
-// ---- trained bank (tools/train.py) --------------------------------------------------
-
-static esp_err_t train_clear_post(httpd_req_t *req)
-{
-    gem_train_clear();
-    return send_banks(req);
-}
-
-static esp_err_t train_add_post(httpd_req_t *req)
-{
-    char label[64];
-    if (!query_param(req, "label", label, sizeof(label)) || !gem_sanitize_label(label)) {
-        return send_error(req, "400 Bad Request", "Need a label");
-    }
-    if (req->content_len == 0 || req->content_len > MAX_UPLOAD) {
-        return send_error(req, "413 Payload Too Large", "Send one JPEG under 512 KB");
-    }
-    uint8_t *jpg = heap_caps_malloc(req->content_len, MALLOC_CAP_SPIRAM);
-    if (!jpg) {
-        return httpd_resp_send_500(req);
-    }
-    size_t got = 0;
-    while (got < req->content_len) {
-        int r = httpd_req_recv(req, (char *)jpg + got, req->content_len - got);
-        if (r == HTTPD_SOCK_ERR_TIMEOUT) {
-            continue;
-        }
-        if (r <= 0) {
-            heap_caps_free(jpg);
-            return ESP_FAIL;  // connection dropped; httpd closes it
-        }
-        got += r;
-    }
-    esp_err_t err = gem_train_add_jpeg(label, jpg, got);
-    heap_caps_free(jpg);
-    if (err == ESP_ERR_NO_MEM) {
-        return send_error(req, "507 Insufficient Storage", "Trained memory is full (1000 photos)");
-    }
-    if (err != ESP_OK) {
-        return send_error(req, "400 Bad Request", "Couldn't read that JPEG");
-    }
-    char buf[64];
-    snprintf(buf, sizeof(buf), "{\"samples\":%d}", gem_sample_count(GEM_BANK_TRAINED));
-    return send_json(req, buf);
-}
-
-static esp_err_t train_commit_post(httpd_req_t *req)
-{
-    if (gem_train_commit() != ESP_OK) {
-        return send_error(req, "500 Internal Server Error", "Saving to flash failed");
-    }
-    return send_banks(req);
+    return send_modes(req);
 }
 
 esp_err_t gem_web_start(void)
@@ -337,9 +278,6 @@ esp_err_t gem_web_start(void)
         {.uri = "/mode",           .method = HTTP_POST, .handler = mode_post},
         {.uri = "/teach",          .method = HTTP_POST, .handler = teach_post},
         {.uri = "/forget",         .method = HTTP_POST, .handler = forget_post},
-        {.uri = "/train/clear",    .method = HTTP_POST, .handler = train_clear_post},
-        {.uri = "/train/add",      .method = HTTP_POST, .handler = train_add_post},
-        {.uri = "/train/commit",   .method = HTTP_POST, .handler = train_commit_post},
         {.uri = "/camera/restart", .method = HTTP_POST, .handler = camera_restart_post},
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {

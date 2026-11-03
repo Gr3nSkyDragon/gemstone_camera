@@ -10,3 +10,6 @@ sdkconfig.old
 *-log.txt
 dataset/
 __pycache__/
+
+# Edge Impulse exports dropped in the project folder (the one in use lives in components/ei_model/model)
+/*-impulse-*/

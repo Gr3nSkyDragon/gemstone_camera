@@ -117,8 +117,7 @@ static void button_task(void *arg)
             gem_result_t r;
             esp_err_t err = gem_identify_now(&r);
             if (err == ESP_ERR_NOT_FOUND) {
-                ESP_LOGW(TAG, "no %s samples yet - teach some stones or switch mode on the web page",
-                         gem_bank_name(gem_mode()));
+                ESP_LOGW(TAG, "nothing taught in the live demo yet - teach some stones on the web page");
             } else if (err != ESP_OK) {
                 ESP_LOGE(TAG, "identify failed: %s", esp_err_to_name(err));
             }
@@ -143,6 +142,8 @@ void app_main(void)
     // Keep going if the camera fails, so the web page can say what's wrong
     if (gem_camera_init() != ESP_OK) {
         ESP_LOGE(TAG, "camera failed - the web page will show the error");
+    } else {
+        gem_ai_warmup();
     }
 
     wifi_start();

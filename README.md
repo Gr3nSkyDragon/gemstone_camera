@@ -1,18 +1,22 @@
 # Gemstone Camera
 
-An ESP32-S3 + OV2640 camera that learns to recognise gemstones. Show it each stone a few
-times, then it names whatever you put under the lens. Everything runs on the ESP32. It makes
-its own WiFi hotspot and serves a web page, so a phone or laptop is all you need to use it.
+An ESP32-S3 + OV2640 camera that recognizes gemstones and names whatever you put under the
+lens. Everything runs on the ESP32. It makes its own WiFi hotspot and serves a web page, so
+a phone or laptop is all you need to use it.
 
-**Status: alpha.** Recognition currently uses *classic computer vision*: it measures colour,
-colour variation and a hue histogram inside a box in the middle of the picture, then finds
-the most similar stones it has seen (nearest neighbours). It keeps two separate memories:
+It identifies stones two ways, switched with the buttons under the camera preview:
 
-- **Trained model**: built from a photo dataset (dozens of photos per stone) on a laptop.
-- **Live demo**: taught on the spot from the web page, a few presses per stone, and wiped
-  whenever you like without touching the trained model.
+- **Trained model**: a neural network trained online with [Edge Impulse](https://edgeimpulse.com)
+  from a photo dataset, then built into the firmware. It runs on the ESP32 itself in about
+  0.2 seconds, with no internet. Current model: aventurine, citrine, empty, jasper,
+  lapis lazuli, quartz.
+- **Live demo**: *classic computer vision*. It measures color, color variation and a hue
+  histogram in the middle of the picture, and matches them against stones taught on the spot
+  from the web page, a few presses each. Wipe and re-teach it whenever you like; the trained
+  model is never touched.
 
-A neural network is the next step; this version then becomes the "colour-only baseline".
+Comparing the two on the same stones is the science-fair experiment: what does a neural
+network get right that color alone can't?
 
 ---
 
@@ -111,24 +115,29 @@ The web page lives inside the firmware on the ESP32. Nothing is loaded from the 
 
 ### Before teaching: lighting and camera settings
 
-The matching is all about colour, so consistency matters more than anything else.
+The matching is all about color, so consistency matters more than anything else.
 
 - Use the same light every time. A small box lit by white LEDs is ideal; avoid daylight
   that changes through the day.
-- Keep the camera at a fixed height, with the stone filling the dashed box.
+- Keep the camera at a fixed height, with the stone filling the dashed box. The box shows
+  what the current mode looks at: the center square for the trained model, the middle half
+  for the live demo.
 - The lens comes focused far away. For close-ups, gently twist the lens to refocus. It's
   usually held by a dab of glue that needs cracking first.
 - Under **Camera settings**, once the picture looks right, turn off **Auto white balance**
   (pick a preset instead), then turn off **Auto exposure** and **Auto gain** and set them by
-  hand. Otherwise the camera "corrects" every stone towards grey. Settings are remembered
+  hand. Otherwise the camera "corrects" every stone toward gray. Settings are remembered
   after a reboot.
 
 ### Identifying
 
-1. Pick which memory to use at the top of the Identify card: **Trained model** or
-   **Live demo**. The choice is remembered after a reboot.
-2. Put a stone under the camera and press **Identify**. It shows the best match and how
-   sure it is. Open **All scores** for a bar graph of every stone's score.
+The camera preview, the mode buttons and **Identify** stay at the top of the screen on a
+phone (or in the left column on a laptop), so the stone stays in view while you use them.
+
+1. Pick **Trained model** or **Live demo** under the preview. The choice is remembered after
+   a reboot.
+2. Put a stone in the dashed box and press **Identify** (purple). It shows the best match and
+   how sure it is. Open **All scores** for a bar graph of every stone's score.
 3. You can also press the board's **BOOT** button. The page shows and speaks that result
    too, and it's printed on the serial monitor, so this also works without a phone.
 
@@ -140,15 +149,16 @@ check *Settings → Text-to-speech* if it stays silent without internet.
 
 ### Live demo training
 
-1. Switch to **Live demo**, type a stone's name and press **Teach** 5-10 times, turning the
-   stone a little between presses. Each press averages 3 frames.
+1. Switch to **Live demo**. A name box and a green **Teach** button appear above Identify.
+   Type a stone's name and press **Teach** 5-10 times, turning the stone a little between
+   presses. Each press averages 3 frames.
 2. Repeat for every stone. Also teach **`empty`**, with nothing in the box, so it doesn't
    guess a stone when there isn't one.
 3. Remove one stone with the **x** on its tag, or everything with **Wipe live demo**. The
    trained model is never affected, so you can wipe, re-teach in front of an audience, and
    switch back to **Trained model** at any time.
 
-Stones are stored on the ESP32 as 16 numbers each, not as photos. Both memories survive
+Taught stones are stored on the ESP32 as 16 numbers each, not as photos. They survive
 reboots and re-flashing.
 
 ### Using your home WiFi instead of the hotspot
@@ -188,26 +198,32 @@ The ESP32 doesn't store photos. You download them to whatever device is viewing 
 The `dataset` folder is laid out the way Edge Impulse expects for image classification:
 one folder per label.
 
-## Building the trained model
+## Training and updating the AI model
 
-Once `dataset\` has a folder of photos for each stone (include an `empty` folder), and the
-laptop is on the board's network:
+The trained model is trained in Edge Impulse Studio (free; it runs in the cloud, so the
+laptop only needs a browser) and built into the firmware.
 
-```powershell
-python tools\train.py
-```
+1. **Collect photos** with `collect.py` as above: about 50-100 per stone plus an `empty`
+   folder, in the same lighting and setup you'll use at the fair.
+2. **Train** in Edge Impulse Studio: upload each folder under *Data acquisition* with the
+   stone's name as its label, then create an impulse with **96x96** images, an *Image*
+   block set to **RGB**, and *Transfer learning*. Train it and check the accuracy.
+3. **Export**: on *Deployment*, choose **C++ library**, keep the **Quantized (int8)** model
+   and the **EON Compiler** on, and build. You get a zip.
+4. **Put it in the firmware**: delete `components\ei_model\model\` and unzip the new export
+   in its place, so `components\ei_model\model\` holds `edge-impulse-sdk`,
+   `model-parameters` and `tflite-model`. Then flash:
 
-Every photo is sent to the board, which measures it exactly the way it measures the live
-camera, saves the results, and switches Identify to **Trained model**. It takes a minute or
-two. It replaces the previous trained model. Useful options:
+   ```powershell
+   .\build.ps1 -Flash auto
+   ```
 
-- `--max 60`: use at most 60 photos per stone, picked evenly. The board holds 1000 in total.
-- `--add`: add to the trained model instead of replacing it.
-- `--only amethyst empty`: use only these folders (the other trained stones are dropped).
-- `--host 192.168.1.42`: the board is on your home WiFi.
+   The start-up log shows the model's name, version and stones, then a test run
+   (`AI model test 2: sees 'empty' (60%) in 431 ms`). The web page picks up the new stone
+   names by itself.
 
-Take the photos in the same lighting and setup you'll use at the fair, because the trained
-model is only as good as how closely its photos match what the camera sees on the day.
+Stone names come from your Edge Impulse labels. Keep them short; spaces are fine
+("lapis lazuli").
 
 ---
 
@@ -218,28 +234,29 @@ model is only as good as how closely its photos match what the camera sees on th
 | Camera fails after the board was off for a while | Make sure PWDN→GPIO 14 and RST→GPIO 21 (not GND/3V3). Then press **Restart camera** on the page, or the board's RST button. |
 | `Camera not answering on SDA/SCL` | Check SDA→4, SCL→5, 3.3V, GND, PWDN→14, RST→21. A swapped SDA/SCL pair is the usual culprit. |
 | `Sensor found but no frames arrive` | The 4 control wires are fine; check VSYNC, HREF, PCLK and D0-D7. |
-| Striped, glitchy or half-grey pictures | Shorten or reseat the jumpers. If that doesn't help, run `.\build.ps1 -Menuconfig` and set **Sensor clock divider** to 1 or 2. |
+| Striped, glitchy or half-gray pictures | Shorten or reseat the jumpers. If that doesn't help, run `.\build.ps1 -Menuconfig` and set **Sensor clock divider** to 1 or 2. |
 | Page won't load | Make sure you're on the GemCam WiFi and the address is `http://`, not `https://`. Phones sometimes drop "no internet" networks, so rejoin. |
 | `running scripts is disabled` | Run the `Set-ExecutionPolicy` line from the setup section. |
 | `ESP-IDF not found` | Install ESP-IDF 5.2, or point to it: `.\build.ps1 -Idf D:\Espressif`. |
 | `MSys/Mingw is not supported` | You're in Git Bash. Use PowerShell. |
-| Identifies everything as the same stone | Teach more samples in the same lighting, turn off auto white balance and exposure, and teach `empty`. Check the right memory (Trained / Live) is selected. |
+| Identifies everything as the same stone | Check the right mode (Trained / Live) is selected. Live demo: teach more samples in the same lighting, turn off auto white balance and exposure, and teach `empty`. Trained model: retrain with photos taken in your fair setup. |
+| Build fails with `internal compiler error` in the Edge Impulse code | The model component must be built with `-Os`; keep `components/ei_model/CMakeLists.txt` as it is when replacing the model. |
 | No speech | Tick **Speak results**, turn the phone's media volume up, and try another voice. |
 
 ---
 
-## How it's organised
+## How it's organized
 
 | File | What it does |
 |---|---|
 | `main/camera.c` | Camera start-up and hard reset, pin map, sensor settings (saved to flash), wiring diagnosis |
-| `main/gem.c` | Colour/texture features, nearest-neighbour scoring, the trained and live sample memories |
+| `main/gem.c` | Both modes: runs the AI model, and the color/texture features and nearest-neighbor scoring of the live demo |
 | `main/web.c`, `main/index.html` | The web page and its HTTP API |
 | `main/main.c` | WiFi (hotspot or home network), BOOT button, start-up |
 | `main/Kconfig.projbuild` | Settings shown in `-Menuconfig` |
 | `partitions.csv` | Flash layout: 3 MB app and a separate area for taught stones and settings |
+| `components/ei_model/` | The Edge Impulse model (`model/`, as exported) and a small C wrapper (`gem_ai.cpp`) |
 | `tools/collect.py` | Photo collector for building a training set |
-| `tools/train.py` | Uploads the photo dataset to build the trained model |
 | `build.ps1` | Build / flash / settings helper for Windows |
 
 ### HTTP API
@@ -247,16 +264,16 @@ model is only as good as how closely its photos match what the camera sees on th
 | Request | Result |
 |---|---|
 | `GET /capture` | Current camera frame (JPEG); header `X-Result-Seq` counts results |
-| `GET /status` | Camera state, settings, mode, both memories' labels (JSON) |
+| `GET /status` | Camera state, settings, mode, the AI model's stones, the live demo's stones (JSON) |
 | `GET /control?var=awb&val=0` | Change a camera setting |
 | `POST /camera/restart` | Power-cycle and restart the camera |
 | `POST /identify` | Capture and identify with the current mode (JSON: label, confidence, every stone's score) |
 | `GET /result` | The most recent result, including ones from the BOOT button |
-| `POST /mode?set=trained` or `live` | Choose which memory Identify uses |
+| `POST /mode?set=trained` or `live` | Choose the trained AI model or the live demo |
 | `POST /teach?label=amethyst` | Capture and store a Live demo sample |
 | `POST /forget?label=amethyst` or `?all=1` | Delete Live demo samples |
-| `POST /train/clear`, `/train/add?label=x` (JPEG body), `/train/commit` | Rebuild the trained model |
 
-## Licence
+## License
 
-GPL-3.0. See [LICENSE](LICENSE).
+GPL-3.0. See [LICENSE](LICENSE). The Edge Impulse SDK in `components/ei_model/model/` has its
+own licenses (Apache 2.0 and BSD), included in that folder.

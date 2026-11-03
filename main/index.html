@@ -7,45 +7,79 @@
 <style>
   :root {
     --bg: #f4f4f6; --card: #fff; --text: #1c1c22; --muted: #6b6b76; --line: #dedee4;
-    --accent: #5b4bd6; --accent-text: #fff; --good: #1f9d55; --bad: #d64545; --track: #e8e8ee;
+    --accent: #5b4bd6; --accent-text: #fff; --teach: #1d8a4c; --teach-text: #fff;
+    --good: #1f9d55; --bad: #d64545; --track: #e8e8ee;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #121216; --card: #1c1c22; --text: #ececf1; --muted: #9a9aa6; --line: #2e2e38;
-      --accent: #8b7cf6; --accent-text: #121216; --good: #3ecf7a; --bad: #f06a6a; --track: #2a2a33;
+      --accent: #8b7cf6; --accent-text: #121216; --teach: #3ecf7a; --teach-text: #0b1a11;
+      --good: #3ecf7a; --bad: #f06a6a; --track: #2a2a33;
     }
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text);
          font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  main { max-width: 720px; margin: 0 auto; padding: 16px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
-  header { display: flex; align-items: center; gap: 10px; }
-  h1 { font-size: 20px; margin: 0; flex: 1; }
+
+  /* Phones: the camera and the main buttons stay pinned at the top while the rest scrolls.
+     Wide screens: they sit in a left column that stays put. */
+  .app { max-width: 1100px; margin: 0 auto; }
+  .stage { background: var(--bg); padding: 12px 16px 10px; display: grid; gap: 10px;
+           z-index: 5; }
+  .panel { padding: 4px 16px 16px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px;
+           align-content: start; }
+  @media (max-width: 759px) and (min-height: 560px) {
+    .stage { position: sticky; top: 0; box-shadow: 0 6px 12px -10px rgba(0,0,0,.45); }
+    .view { max-height: 30vh; }
+  }
+  @media (min-width: 760px) {
+    .app { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+    .stage { position: sticky; top: 0; padding: 16px; }
+    .panel { padding: 16px; }
+    .view { max-height: 60vh; }
+  }
+
+  header { display: flex; align-items: center; gap: 10px; max-width: 1100px; margin: 0 auto; padding: 12px 16px 0; }
+  h1 { font-size: 18px; margin: 0; flex: 1; }
   h2 { font-size: 13px; margin: 0 0 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
   .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
   .dot.ok { background: var(--good); } .dot.bad { background: var(--bad); }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
   .error { border-color: var(--bad); display: none; }
   .error p { color: var(--bad); margin: 0 0 10px; }
-  .view { position: relative; aspect-ratio: 4 / 3; background: #000; border-radius: 8px; overflow: hidden; }
+
+  .view { position: relative; aspect-ratio: 4 / 3; width: 100%; margin: 0 auto; background: #000;
+          border-radius: 10px; overflow: hidden; }
   .view img { width: 100%; height: 100%; object-fit: contain; display: block; }
-  .box { position: absolute; left: 25%; top: 25%; width: 50%; height: 50%;
-         border: 2px dashed rgba(255,255,255,.8); border-radius: 4px; pointer-events: none; }
+  .box { position: absolute; border: 2px dashed rgba(255,255,255,.85); border-radius: 4px;
+         pointer-events: none; transition: all .2s; }
+  .box.live { left: 25%; top: 25%; width: 50%; height: 50%; }
+  .box.trained { left: 12.5%; top: 0; width: 75%; height: 100%; }
+  .tools { position: absolute; right: 8px; top: 8px; display: flex; gap: 6px; }
+  .tools button { padding: 4px 10px; font-size: 13px; background: rgba(0,0,0,.55); color: #fff;
+                  border-color: rgba(255,255,255,.25); }
+
   .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .hint { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
   button, select { font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--text);
                    border-radius: 8px; padding: 8px 14px; cursor: pointer; }
-  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
   button:disabled { opacity: .5; cursor: wait; }
-  input[type=text] { font: inherit; flex: 1; min-width: 140px; padding: 8px 10px; border-radius: 8px;
-                     border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+  .big { width: 100%; padding: 12px; font-size: 17px; font-weight: 700; border: 0; }
+  .identify { background: var(--accent); color: var(--accent-text); }
+  .teach { background: var(--teach); color: var(--teach-text); border: 0; font-weight: 700; padding: 10px 18px; }
+  input[type=text] { font: inherit; flex: 1; min-width: 0; padding: 9px 10px; border-radius: 8px;
+                     border: 1px solid var(--line); background: var(--card); color: var(--text); }
+  .teach-row { display: flex; gap: 8px; }
+
   .modes { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--line); border-radius: 10px;
-           overflow: hidden; margin-bottom: 12px; }
-  .modes button { border: 0; border-radius: 0; padding: 10px 8px; background: var(--bg); }
+           overflow: hidden; }
+  .modes button { border: 0; border-radius: 0; padding: 7px 6px; background: var(--card); font-size: 14px;
+                  line-height: 1.25; }
   .modes button + button { border-left: 1px solid var(--line); }
   .modes button.on { background: var(--accent); color: var(--accent-text); font-weight: 600; }
-  .modes small { display: block; font-size: 12px; opacity: .8; font-weight: 400; }
-  .result { font-size: 28px; font-weight: 700; margin: 4px 0; min-height: 1.3em; }
+  .modes small { display: block; font-size: 11.5px; opacity: .8; font-weight: 400; }
+
+  .result { font-size: 28px; font-weight: 700; margin: 0 0 4px; min-height: 1.3em; }
   .bar { height: 8px; background: var(--track); border-radius: 4px; overflow: hidden; }
   .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
   details.scores { margin-top: 8px; }
@@ -63,93 +97,95 @@
             padding-top: 12px; border-top: 1px solid var(--line); }
   .speech label { display: flex; gap: 6px; align-items: center; }
   .speech select { padding: 6px 8px; flex: 1 1 160px; min-width: 0; width: 100%; text-overflow: ellipsis; }
-  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
   .chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px;
           border: 1px solid var(--line); background: var(--bg); font-size: 14px; }
   .chip.edit { padding-right: 6px; }
-  .chip b { font-weight: 600; cursor: pointer; }
+  .chip b { font-weight: 600; }
+  .chip.edit b { cursor: pointer; }
   .chip span { color: var(--muted); }
   .chip button { padding: 0 6px; border: 0; background: none; color: var(--muted); font-size: 16px; }
   .empty { color: var(--muted); font-size: 14px; }
   .settings { display: grid; grid-template-columns: auto 1fr auto; gap: 8px 12px; align-items: center; margin-top: 12px; }
   .settings output { min-width: 3ch; text-align: right; color: var(--muted); }
   .settings input[type=range] { width: 100%; }
-  code { font-size: 13px; }
+  [hidden] { display: none !important; }
 </style>
 </head>
 <body>
-<main>
-  <header><h1>Gemstone Cam</h1><div class="dot" id="dot" title="connection"></div></header>
-
-  <div class="card error" id="error">
-    <p id="errorText"></p>
-    <button id="restart">Restart camera</button>
-  </div>
-
-  <div class="card">
-    <div class="view"><img id="cam" alt=""><div class="box"></div></div>
-    <div class="row" style="margin-top:10px">
-      <button id="live">Pause preview</button>
-      <button id="save">Save photo</button>
+<header><h1>Gemstone Cam</h1><div class="dot" id="dot" title="connection"></div></header>
+<div class="app">
+  <section class="stage">
+    <div class="view">
+      <img id="cam" alt="">
+      <div class="box live" id="box"></div>
+      <div class="tools">
+        <button id="live">Pause</button>
+        <button id="save">Save photo</button>
+      </div>
     </div>
-    <p class="hint">Only what's inside the dashed box is measured. Keep the lighting and distance the same every time.</p>
-  </div>
-
-  <div class="card">
-    <h2>Identify</h2>
     <div class="modes">
-      <button data-mode="trained">Trained model<small id="trainedCount">&nbsp;</small></button>
+      <button data-mode="trained">Trained model<small id="trainedCount">AI</small></button>
       <button data-mode="live">Live demo<small id="liveCount">&nbsp;</small></button>
     </div>
-    <div class="result" id="result">&mdash;</div>
-    <div class="bar"><div id="conf"></div></div>
-    <details class="scores" id="scoresBox">
-      <summary>All scores</summary>
-      <div class="graph" id="graph"><span class="empty">Press Identify to see every stone's score.</span></div>
-    </details>
-    <p class="hint" id="detail">Press Identify, or the BOOT button on the board.</p>
-    <div class="row" style="margin-top:10px">
-      <button class="primary" id="identify">Identify</button>
-      <button id="sayAgain" disabled>Say it again</button>
-    </div>
-    <div class="speech">
-      <label><input type="checkbox" id="speak"> Speak results</label>
-      <select id="voice" aria-label="Voice"></select>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>Live demo training</h2>
-    <div class="row">
+    <div class="teach-row" id="teachRow" hidden>
       <input type="text" id="label" list="known" placeholder="Stone name, e.g. amethyst" maxlength="23">
       <datalist id="known"></datalist>
-      <button class="primary" id="teach">Teach</button>
+      <button class="teach" id="teach">Teach</button>
     </div>
-    <p class="hint">Teach each stone 5&ndash;10 times, turning it a little between presses, and teach "empty" too. This only changes the Live demo; the trained model is kept safe.</p>
-    <div class="chips" id="liveLabels"></div>
-    <div class="row" style="margin-top:10px"><button id="wipe">Wipe live demo</button></div>
-  </div>
+    <button class="big identify" id="identify">Identify</button>
+  </section>
 
-  <div class="card">
-    <h2>Trained model</h2>
-    <div class="chips" id="trainedLabels"></div>
-    <p class="hint">Built from your photo dataset with <code>python tools\train.py</code> on the laptop. Collect photos first with <code>tools\collect.py</code>.</p>
-  </div>
+  <section class="panel">
+    <div class="card error" id="error">
+      <p id="errorText"></p>
+      <button id="restart">Restart camera</button>
+    </div>
 
-  <div class="card">
-    <details>
-      <summary>Camera settings</summary>
-      <p class="hint">Set these up before teaching or collecting photos. Turning off auto white balance and auto exposure keeps colours consistent. Settings are remembered after a reboot.</p>
-      <div class="settings" id="settings"></div>
-      <div class="row" style="margin-top:12px"><button id="restart2">Restart camera</button></div>
-    </details>
-  </div>
-</main>
+    <div class="card">
+      <div class="result" id="result">&mdash;</div>
+      <div class="bar"><div id="conf"></div></div>
+      <details class="scores" id="scoresBox">
+        <summary>All scores</summary>
+        <div class="graph" id="graph"><span class="empty">Press Identify to see every stone's score.</span></div>
+      </details>
+      <p class="hint" id="detail">Put a stone in the dashed box and press Identify (or the BOOT button on the board).</p>
+      <div class="speech">
+        <label><input type="checkbox" id="speak"> Speak results</label>
+        <select id="voice" aria-label="Voice"></select>
+        <button id="sayAgain" disabled>Say it again</button>
+      </div>
+    </div>
+
+    <div class="card" id="liveCard" hidden>
+      <h2>Live demo: taught stones</h2>
+      <div class="chips" id="liveLabels"></div>
+      <p class="hint">Type a name above and press <b>Teach</b> 5&ndash;10 times per stone, turning it a little each time. Teach "empty" too. This is color matching; the trained AI model isn't changed.</p>
+      <div class="row" style="margin-top:10px"><button id="wipe">Wipe live demo</button></div>
+    </div>
+
+    <div class="card" id="trainedCard">
+      <h2>Trained model</h2>
+      <div class="chips" id="trainedLabels"></div>
+      <p class="hint" id="trainedInfo">A neural network trained online with Edge Impulse from the photo dataset. It looks at the square inside the dashed box.</p>
+    </div>
+
+    <div class="card">
+      <details>
+        <summary>Camera settings</summary>
+        <p class="hint">Set these up before teaching or collecting photos. Turning off auto white balance and auto exposure keeps colors consistent. Settings are remembered after a reboot.</p>
+        <div class="settings" id="settings"></div>
+        <div class="row" style="margin-top:12px"><button id="restart2">Restart camera</button></div>
+      </details>
+    </div>
+  </section>
+</div>
 
 <script>
 const $ = s => document.querySelector(s);
 let live = true, busy = false, lastBlob = null, lastUrl = null, saved = 0;
-let lastSeq = 0, lastResult = null, mode = "live";
+let lastSeq = 0, lastResult = null, mode = "trained";
 
 const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch { return d; } },
@@ -229,11 +265,11 @@ async function restartCamera(btn) {
 $("#restart").onclick = e => restartCamera(e.target);
 $("#restart2").onclick = e => restartCamera(e.target);
 
-async function post(path, body) {
+async function post(path) {
   busy = true;
   document.querySelectorAll("button").forEach(b => b.disabled = true);
   try {
-    const r = await fetch(path, { method: "POST", body });
+    const r = await fetch(path, { method: "POST" });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || r.statusText);
     return j;
@@ -253,7 +289,7 @@ function showResult(r, speakIt) {
   $("#conf").style.width = Math.round(r.confidence * 100) + "%";
   $("#detail").textContent = `${Math.round(r.confidence * 100)}% sure` +
     (r.runner_up ? `, next guess: ${pretty(r.runner_up)}` : "") +
-    ` · ${r.mode === "trained" ? "trained model" : "live demo"} · ${r.ms} ms`;
+    ` · ${r.mode === "trained" ? "trained AI model" : "live demo"} · ${r.ms} ms`;
   $("#sayAgain").disabled = false;
 
   const g = $("#graph");
@@ -359,15 +395,19 @@ if (synth) {
 function chips(box, list, editable) {
   box.innerHTML = "";
   if (!list.length) {
-    box.innerHTML = `<span class="empty">${editable ? "Nothing taught yet." : "No trained photos yet."}</span>`;
+    box.innerHTML = `<span class="empty">${editable ? "Nothing taught yet." : "No stones."}</span>`;
     return;
   }
   for (const { label, count } of list) {
     const chip = document.createElement("div");
     chip.className = "chip" + (editable ? " edit" : "");
-    chip.innerHTML = "<b></b><span></span>";
+    chip.innerHTML = "<b></b>";
     chip.querySelector("b").textContent = pretty(label);
-    chip.querySelector("span").textContent = count;
+    if (count !== undefined) {
+      const c = document.createElement("span");
+      c.textContent = count;
+      chip.appendChild(c);
+    }
     if (editable) {
       chip.querySelector("b").onclick = () => { $("#label").value = label; };
       const x = document.createElement("button");
@@ -375,7 +415,7 @@ function chips(box, list, editable) {
       x.innerHTML = "&times;";
       x.onclick = async () => {
         if (!confirm(`Forget all ${count} samples of "${pretty(label)}"?`)) return;
-        try { renderBanks(await post("/forget?label=" + encodeURIComponent(label))); }
+        try { renderModes(await post("/forget?label=" + encodeURIComponent(label))); }
         catch (e) { alert(e.message); }
       };
       chip.appendChild(x);
@@ -384,12 +424,19 @@ function chips(box, list, editable) {
   }
 }
 
-function renderBanks(j) {
+function renderModes(j) {
   mode = j.mode;
+  const isLive = mode === "live";
   document.querySelectorAll(".modes button").forEach(b => b.classList.toggle("on", b.dataset.mode === mode));
-  const n = (bank, word) => `${bank.labels.length} stones · ${bank.samples} ${word}`;
-  $("#trainedCount").textContent = n(j.trained, "photos");
-  $("#liveCount").textContent = n(j.live, "samples");
+  $("#box").className = "box " + mode;
+  $("#teachRow").hidden = !isLive;
+  $("#liveCard").hidden = !isLive;
+  $("#trainedCard").hidden = isLive;
+
+  $("#trainedCount").textContent = `AI · ${j.trained.labels.length} stones`;
+  $("#liveCount").textContent = `Color matching · ${j.live.labels.length} stones`;
+  $("#trainedInfo").textContent = `A neural network ("${j.trained.name}", version ${j.trained.version}) ` +
+    "trained online with Edge Impulse from the photo dataset. It looks at the square inside the dashed box.";
   chips($("#liveLabels"), j.live.labels, true);
   chips($("#trainedLabels"), j.trained.labels, false);
   $("#known").innerHTML = "";
@@ -400,27 +447,22 @@ function renderBanks(j) {
 
 document.querySelectorAll(".modes button").forEach(b => b.onclick = async () => {
   if (b.dataset.mode === mode) return;
-  try { renderBanks(await post("/mode?set=" + b.dataset.mode)); }
+  try { renderModes(await post("/mode?set=" + b.dataset.mode)); }
   catch (e) { alert(e.message); }
 });
 
 async function teach() {
   const label = $("#label").value.trim();
   if (!label) { $("#label").focus(); return; }
-  try {
-    const j = await post("/teach?label=" + encodeURIComponent(label));
-    renderBanks(j);
-    if (j.mode !== "live" && confirm("Taught. Switch Identify to the Live demo to test it?")) {
-      renderBanks(await post("/mode?set=live"));
-    }
-  } catch (e) { alert(e.message); }
+  try { renderModes(await post("/teach?label=" + encodeURIComponent(label))); }
+  catch (e) { alert(e.message); }
 }
 $("#teach").onclick = teach;
 $("#label").addEventListener("keydown", e => { if (e.key === "Enter") teach(); });
 
 $("#wipe").onclick = async () => {
-  if (!confirm("Wipe everything taught in the live demo? The trained model isn't affected.")) return;
-  try { renderBanks(await post("/forget?all=1")); }
+  if (!confirm("Wipe everything taught in the live demo? The trained AI model isn't affected.")) return;
+  try { renderModes(await post("/forget?all=1")); }
   catch (e) { alert(e.message); }
 };
 
@@ -428,7 +470,7 @@ $("#wipe").onclick = async () => {
 
 $("#live").onclick = () => {
   live = !live;
-  $("#live").textContent = live ? "Pause preview" : "Resume preview";
+  $("#live").textContent = live ? "Pause" : "Resume";
 };
 
 $("#save").onclick = () => {
@@ -479,7 +521,7 @@ function buildSettings(values) {
     const s = await (await fetch("/status")).json();
     showError(s.camera_ok ? "" : s.error);
     buildSettings(s.settings);
-    renderBanks(s);
+    renderModes(s);
     lastSeq = s.seq;
     if (s.seq) fetchResult(false);  // show the last result without announcing it again
     setConnected(true);

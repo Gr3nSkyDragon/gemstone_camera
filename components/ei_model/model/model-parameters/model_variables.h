@@ -47,7 +47,7 @@
 #include "edge-impulse-sdk/classifier/inferencing_engines/engines.h"
 #include "edge-impulse-sdk/classifier/postprocessing/ei_postprocessing_common.h"
 
-const char* ei_classifier_inferencing_categories_1155644_1[] = { "aventurine", "citrine", "empty", "jasper", "lapis lazuli", "quartz" };
+const char* ei_classifier_inferencing_categories_1155644_1[] = { "aventurine", "citrine", "jasper", "lapis lazuli", "quartz" };
 
 ei_dsp_named_axis_t ei_dsp_config_1155644_3_named_axes[] = {
     { .name = "Image", .axis = 0 }
@@ -141,10 +141,10 @@ uint32_t *freeform_outputs_1155644_1 = nullptr;
 const ei_impulse_t impulse_1155644_1 = {
     .project_id = 1155644,
     .project_owner = "Gr3nSky",
-    .project_name = "Gr3nSky-project-1",
+    .project_name = "gemstone_camera",
     .impulse_id = 1,
     .impulse_name = "Impulse #1",
-    .deploy_version = 1,
+    .deploy_version = 3,
 
     .nn_input_frame_size = 27648,
     .raw_sample_count = 9216,
@@ -175,7 +175,7 @@ const ei_impulse_t impulse_1155644_1 = {
     .slices_per_model_window = 4,
 
     .has_anomaly = EI_ANOMALY_TYPE_UNKNOWN,
-    .label_count = 6,
+    .label_count = 5,
     .categories = ei_classifier_inferencing_categories_1155644_1,
     .results_type = EI_CLASSIFIER_TYPE_CLASSIFICATION,
     .freeform_outputs_size = freeform_outputs_1155644_1_size,

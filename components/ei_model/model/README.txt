@@ -1,7 +1,7 @@
 
-# Edge Impulse library for Gr3nSky-project-1
+# Edge Impulse library for gemstone_camera
 
-This is a C++ library that lets you run the impulse for "Gr3nSky-project-1" (https://studio.edgeimpulse.com/studio/1155644) on any device. It consists of the Edge Impulse inferencing SDK - with implementations of both processing and learning blocks - and your model. You will need to include this library in your project to run your impulse locally.
+This is a C++ library that lets you run the impulse for "gemstone_camera" (https://studio.edgeimpulse.com/studio/1155644) on any device. It consists of the Edge Impulse inferencing SDK - with implementations of both processing and learning blocks - and your model. You will need to include this library in your project to run your impulse locally.
 
 ## Getting Started
 

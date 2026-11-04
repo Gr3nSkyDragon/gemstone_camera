@@ -8,7 +8,7 @@ It identifies stones two ways, switched with the buttons under the camera previe
 
 - **Trained model**: a neural network trained online with [Edge Impulse](https://edgeimpulse.com)
   from a photo dataset, then built into the firmware. It runs on the ESP32 itself in about
-  0.2 seconds, with no internet. Current model: aventurine, citrine, empty, jasper,
+  0.2 seconds, with no internet. Current model (v3): aventurine, citrine, jasper,
   lapis lazuli, quartz.
 - **Live demo**: *classic computer vision*. It measures color, color variation and a hue
   histogram in the middle of the picture, and matches them against stones taught on the spot
@@ -219,8 +219,11 @@ laptop only needs a browser) and built into the firmware.
    ```
 
    The start-up log shows the model's name, version and stones, then a test run
-   (`AI model test 2: sees 'empty' (60%) in 431 ms`). The web page picks up the new stone
+   (`AI model test 2: sees 'citrine' (98%) in 400 ms`). The web page picks up the new stone
    names by itself.
+
+   Include an `empty` class (photos with nothing in the box). Without one, the model always
+   names a stone, even when there's nothing there.
 
 Stone names come from your Edge Impulse labels. Keep them short; spaces are fine
 ("lapis lazuli").

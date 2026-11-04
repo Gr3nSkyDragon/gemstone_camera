@@ -152,8 +152,7 @@ check *Settings → Text-to-speech* if it stays silent without internet.
 1. Switch to **Live demo**. A name box and a green **Teach** button appear above Identify.
    Type a stone's name and press **Teach** 5-10 times, turning the stone a little between
    presses. Each press averages 3 frames.
-2. Repeat for every stone. Also teach **`empty`**, with nothing in the box, so it doesn't
-   guess a stone when there isn't one.
+2. Repeat for every stone.
 3. Remove one stone with the **x** on its tag, or everything with **Wipe live demo**. The
    trained model is never affected, so you can wipe, re-teach in front of an audience, and
    switch back to **Trained model** at any time.
@@ -203,8 +202,8 @@ one folder per label.
 The trained model is trained in Edge Impulse Studio (free; it runs in the cloud, so the
 laptop only needs a browser) and built into the firmware.
 
-1. **Collect photos** with `collect.py` as above: about 50-100 per stone plus an `empty`
-   folder, in the same lighting and setup you'll use at the fair.
+1. **Collect photos** with `collect.py` as above: about 50-100 per stone, in the same
+   lighting and setup you'll use at the fair.
 2. **Train** in Edge Impulse Studio: upload each folder under *Data acquisition* with the
    stone's name as its label, then create an impulse with **96x96** images, an *Image*
    block set to **RGB**, and *Transfer learning*. Train it and check the accuracy.
@@ -222,8 +221,7 @@ laptop only needs a browser) and built into the firmware.
    (`AI model test 2: sees 'citrine' (98%) in 400 ms`). The web page picks up the new stone
    names by itself.
 
-   Include an `empty` class (photos with nothing in the box). Without one, the model always
-   names a stone, even when there's nothing there.
+   The model always names one of its stones, so it assumes there's a stone in the box.
 
 Stone names come from your Edge Impulse labels. Keep them short; spaces are fine
 ("lapis lazuli").
@@ -242,7 +240,7 @@ Stone names come from your Edge Impulse labels. Keep them short; spaces are fine
 | `running scripts is disabled` | Run the `Set-ExecutionPolicy` line from the setup section. |
 | `ESP-IDF not found` | Install ESP-IDF 5.2, or point to it: `.\build.ps1 -Idf D:\Espressif`. |
 | `MSys/Mingw is not supported` | You're in Git Bash. Use PowerShell. |
-| Identifies everything as the same stone | Check the right mode (Trained / Live) is selected. Live demo: teach more samples in the same lighting, turn off auto white balance and exposure, and teach `empty`. Trained model: retrain with photos taken in your fair setup. |
+| Identifies everything as the same stone | Check the right mode (Trained / Live) is selected. Live demo: teach more samples in the same lighting, and turn off auto white balance and exposure. Trained model: retrain with photos taken in your fair setup. |
 | Build fails with `internal compiler error` in the Edge Impulse code | The model component must be built with `-Os`; keep `components/ei_model/CMakeLists.txt` as it is when replacing the model. |
 | No speech | Tick **Speak results**, turn the phone's media volume up, and try another voice. |
 

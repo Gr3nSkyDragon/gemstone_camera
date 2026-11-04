@@ -161,7 +161,7 @@
     <div class="card" id="liveCard" hidden>
       <h2>Live demo: taught stones</h2>
       <div class="chips" id="liveLabels"></div>
-      <p class="hint">Type a name above and press <b>Teach</b> 5&ndash;10 times per stone, turning it a little each time. Teach "empty" too. This is color matching; the trained AI model isn't changed.</p>
+      <p class="hint">Type a name above and press <b>Teach</b> 5&ndash;10 times per stone, turning it a little each time. This is color matching; the trained AI model isn't changed.</p>
       <div class="row" style="margin-top:10px"><button id="wipe">Wipe live demo</button></div>
     </div>
 
@@ -339,7 +339,6 @@ const synth = window.speechSynthesis;
 
 function phrase(r) {
   const name = pretty(r.label);
-  if (r.label === "empty") return "There's nothing there.";
   if (r.confidence >= 0.6) return name + ".";
   if (r.confidence >= 0.4) return "Probably " + name + ".";
   return "I'm not sure. Maybe " + name + ".";

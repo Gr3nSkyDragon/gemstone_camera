@@ -4,7 +4,7 @@ Turn the stone a little between shots so the photos aren't all identical.
 
     python collect.py amethyst                 # 50 photos, one every 0.7 s
     python collect.py rose_quartz -n 80 -i 1
-    python collect.py empty --host 192.168.1.42
+    python collect.py citrine --host 192.168.1.42
 
 Standard library only, so it runs on any Python 3.
 """

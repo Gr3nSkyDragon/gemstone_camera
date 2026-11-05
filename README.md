@@ -8,7 +8,7 @@ It identifies stones two ways, switched with the buttons under the camera previe
 
 - **Trained model**: a neural network trained online with [Edge Impulse](https://edgeimpulse.com)
   from a photo dataset, then built into the firmware. It runs on the ESP32 itself in about
-  0.2 seconds, with no internet. Current model (v3): aventurine, citrine, jasper,
+  0.4 seconds, with no internet. Current model (v3): aventurine, citrine, jasper,
   lapis lazuli, quartz.
 - **Live demo**: *classic computer vision*. It measures color, color variation and a hue
   histogram in the middle of the picture, and matches them against stones taught on the spot
@@ -261,6 +261,7 @@ Stone names come from your Edge Impulse labels. Keep them short; spaces are fine
 | `MSys/Mingw is not supported` | You're in Git Bash. Use PowerShell. |
 | Identifies everything as the same stone | Check the right mode (Trained / Live) is selected. Live demo: teach more samples in the same lighting, and turn off auto white balance and exposure. Trained model: retrain with photos taken in your fair setup. |
 | Build fails with `internal compiler error` in the Edge Impulse code | The model component must be built with `-Os`; keep `components/ei_model/CMakeLists.txt` as it is when replacing the model. |
+| Trained model gets stones wrong that Edge Impulse gets right | Run `tools\classify.py` on the dataset (see *Checking the model on the board*). If the board disagrees with Studio on the same photos, the firmware is at fault; see `components/ei_model/espnn_fix.c` for the one bug found so far. |
 | No speech | Tick **Speak results**, turn the phone's media volume up, and try another voice. |
 
 ---
@@ -276,6 +277,8 @@ Stone names come from your Edge Impulse labels. Keep them short; spaces are fine
 | `main/Kconfig.projbuild` | Settings shown in `-Menuconfig` |
 | `partitions.csv` | Flash layout: 3 MB app and a separate area for taught stones and settings |
 | `components/ei_model/` | The Edge Impulse model (`model/`, as exported) and a small C wrapper (`gem_ai.cpp`) |
+| `components/ei_model/espnn_fix.c` | Works around an ESP-NN bug that made the first layer of the model wrong on the ESP32-S3 (jasper read as lapis lazuli, citrine as quartz) |
+| `tools/classify.py` | Runs saved photos through the model on the board, to compare with Edge Impulse |
 | `tools/collect.py` | Photo collector for building a training set |
 | `build.ps1` | Build / flash / settings helper for Windows |
 

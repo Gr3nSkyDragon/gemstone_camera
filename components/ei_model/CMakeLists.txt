@@ -19,7 +19,7 @@ file(GLOB_RECURSE EI_SRCS
     "${SDK}/tensorflow/lite/*.c")
 file(GLOB EI_PORT_SRCS "${SDK}/porting/espressif/*.cpp")
 
-idf_component_register(SRCS "gem_ai.cpp" ${EI_SRCS} ${EI_PORT_SRCS} ${ESPNN_SRCS}
+idf_component_register(SRCS "gem_ai.cpp" "espnn_fix.c" ${EI_SRCS} ${EI_PORT_SRCS} ${ESPNN_SRCS}
                        INCLUDE_DIRS "include"
                        PRIV_INCLUDE_DIRS "model"
                                          "model/edge-impulse-sdk"
@@ -44,3 +44,9 @@ endif()
 # ESP-NN, which does the heavy maths, is still built at -O2.
 target_compile_options(${COMPONENT_LIB} PRIVATE -w -Os)
 set_source_files_properties(${ESPNN_SRCS} PROPERTIES COMPILE_OPTIONS "-O2")
+
+if(CONFIG_IDF_TARGET_ESP32S3)
+    # ESP-NN's S3 assembly convolution is wrong for layers with under 8 input
+    # channels; espnn_fix.c routes those to ESP-NN's C version
+    idf_build_set_property(LINK_OPTIONS "-Wl,--wrap=esp_nn_conv_s8_esp32s3" APPEND)
+endif()

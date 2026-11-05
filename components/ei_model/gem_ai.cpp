@@ -33,6 +33,13 @@ extern "C" const char *gem_ai_name(void)
 }
 extern "C" int gem_ai_version(void) { return EI_CLASSIFIER_PROJECT_DEPLOY_VERSION; }
 
+extern "C" const uint8_t *gem_ai_last_input(int *width, int *height)
+{
+    *width = IN_W;
+    *height = IN_H;
+    return s_input;
+}
+
 extern "C" esp_err_t gem_ai_classify(const uint8_t *rgb, int width, int height, float *scores, int *ms)
 {
     // The resize crops into the output buffer at full size before shrinking it

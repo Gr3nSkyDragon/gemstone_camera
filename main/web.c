@@ -195,6 +195,108 @@ static esp_err_t identify_post(httpd_req_t *req)
     return sent;
 }
 
+// ---- debug: classify an uploaded photo ------------------------------------------
+
+#define CLASSIFY_MAX_JPEG (512 * 1024)
+#define CLASSIFY_MAX_INPUT (160 * 160 * 3)
+
+static void put_le(uint8_t *p, uint32_t v, int bytes)
+{
+    for (int i = 0; i < bytes; i++) {
+        p[i] = (uint8_t)(v >> (8 * i));
+    }
+}
+
+// 24-bit BMP of an RGB888 image: rows bottom-up in B,G,R order, padded to 4 bytes
+static esp_err_t send_bmp(httpd_req_t *req, const uint8_t *rgb, int w, int h)
+{
+    const int row = (w * 3 + 3) & ~3;
+    const uint32_t size = 54 + (uint32_t)row * h;
+    uint8_t *bmp = heap_caps_calloc(1, size, MALLOC_CAP_SPIRAM);
+    if (!bmp) {
+        return httpd_resp_send_500(req);
+    }
+    bmp[0] = 'B';
+    bmp[1] = 'M';
+    put_le(bmp + 2, size, 4);
+    put_le(bmp + 10, 54, 4);   // pixel data offset
+    put_le(bmp + 14, 40, 4);   // info header size
+    put_le(bmp + 18, w, 4);
+    put_le(bmp + 22, h, 4);
+    put_le(bmp + 26, 1, 2);    // planes
+    put_le(bmp + 28, 24, 2);   // bits per pixel
+    for (int y = 0; y < h; y++) {
+        const uint8_t *s = rgb + (size_t)(h - 1 - y) * w * 3;
+        uint8_t *d = bmp + 54 + (size_t)y * row;
+        for (int x = 0; x < w; x++, s += 3, d += 3) {
+            d[0] = s[2];
+            d[1] = s[1];
+            d[2] = s[0];
+        }
+    }
+    httpd_resp_set_type(req, "image/bmp");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    esp_err_t err = httpd_resp_send(req, (const char *)bmp, size);
+    heap_caps_free(bmp);
+    return err;
+}
+
+// POST a JPEG (raw body, e.g. a photo from dataset/) to run it through exactly
+// the same decode -> crop/resize -> model path as a camera frame.
+//   /classify             -> the result as JSON, like /identify
+//   /classify?view=input  -> the 96x96 image the model actually saw, as a BMP
+static esp_err_t classify_post(httpd_req_t *req)
+{
+    if (req->content_len == 0 || req->content_len > CLASSIFY_MAX_JPEG) {
+        return send_error(req, "413 Payload Too Large", "Send one JPEG of up to 512 KB as the request body");
+    }
+    char view[8] = "";
+    const bool want_input = query_param(req, "view", view, sizeof(view)) && strcmp(view, "input") == 0;
+
+    uint8_t *jpg = heap_caps_malloc(req->content_len, MALLOC_CAP_SPIRAM);
+    uint8_t *input = want_input ? heap_caps_malloc(CLASSIFY_MAX_INPUT, MALLOC_CAP_SPIRAM) : NULL;
+    gem_result_t *r = malloc(sizeof(*r));
+    esp_err_t sent;
+    if (!jpg || !r || (want_input && !input)) {
+        sent = httpd_resp_send_500(req);
+        goto done;
+    }
+
+    size_t got = 0;
+    int timeouts = 0;
+    while (got < req->content_len) {
+        int n = httpd_req_recv(req, (char *)jpg + got, req->content_len - got);
+        if (n == HTTPD_SOCK_ERR_TIMEOUT && ++timeouts < 3) {
+            continue;
+        }
+        if (n <= 0) {
+            sent = ESP_FAIL;  // connection dropped; nothing to reply to
+            goto done;
+        }
+        got += n;
+    }
+    if (got < 2 || jpg[0] != 0xFF || jpg[1] != 0xD8) {
+        sent = send_error(req, "415 Unsupported Media Type", "That isn't a JPEG");
+        goto done;
+    }
+
+    int iw = 0, ih = 0;
+    esp_err_t err = gem_classify_jpeg(jpg, got, r, input, CLASSIFY_MAX_INPUT, &iw, &ih);
+    if (err != ESP_OK) {
+        sent = send_error(req, "500 Internal Server Error", esp_err_to_name(err));
+    } else if (want_input) {
+        sent = send_bmp(req, input, iw, ih);
+    } else {
+        sent = send_result(req, r);
+    }
+
+done:
+    heap_caps_free(jpg);
+    heap_caps_free(input);
+    free(r);
+    return sent;
+}
+
 static esp_err_t result_get(httpd_req_t *req)
 {
     gem_result_t *r = malloc(sizeof(*r));
@@ -275,6 +377,7 @@ esp_err_t gem_web_start(void)
         {.uri = "/control",        .method = HTTP_GET,  .handler = control_get},
         {.uri = "/result",         .method = HTTP_GET,  .handler = result_get},
         {.uri = "/identify",       .method = HTTP_POST, .handler = identify_post},
+        {.uri = "/classify",       .method = HTTP_POST, .handler = classify_post},
         {.uri = "/mode",           .method = HTTP_POST, .handler = mode_post},
         {.uri = "/teach",          .method = HTTP_POST, .handler = teach_post},
         {.uri = "/forget",         .method = HTTP_POST, .handler = forget_post},

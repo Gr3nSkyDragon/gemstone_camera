@@ -20,6 +20,10 @@ int gem_ai_version(void);
 // label (adding up to 1) and the time inference took.
 esp_err_t gem_ai_classify(const uint8_t *rgb, int width, int height, float *scores, int *ms);
 
+// The RGB888 image the last gem_ai_classify() call fed the model, after the
+// crop and resize (NULL before the first call). Only valid until the next call.
+const uint8_t *gem_ai_last_input(int *width, int *height);
+
 #ifdef __cplusplus
 }
 #endif

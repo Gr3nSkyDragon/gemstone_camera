@@ -197,6 +197,25 @@ The ESP32 doesn't store photos. You download them to whatever device is viewing 
 The `dataset` folder is laid out the way Edge Impulse expects for image classification:
 one folder per label.
 
+## Checking the model on the board
+
+`tools/classify.py` uploads saved photos to the board, which runs each one through exactly
+the same decode, crop, resize and model as a live camera frame. If the board gets the same
+answers as Edge Impulse Studio for the same photos, the firmware is working and any
+problem is in what the camera sees.
+
+```powershell
+python tools\classify.py dataset\jasper\jasper_0012.jpg   # one photo, every score
+python tools\classify.py dataset -n 20                     # 20 per stone, plus a confusion matrix
+python tools\classify.py dataset -n 5 --save-input seen    # also save what the model saw
+```
+
+Each folder's name is taken as the right answer (`lapis_lazuli` matches `lapis lazuli`).
+`--save-input` writes the 96x96 image the model actually received as a `.bmp`, so you can
+check its colors and cropping by eye. The same thing works without Python:
+`curl --data-binary @photo.jpg http://192.168.4.1/classify` returns the scores, and
+adding `?view=input` to the URL returns the image.
+
 ## Training and updating the AI model
 
 The trained model is trained in Edge Impulse Studio (free; it runs in the cloud, so the

@@ -468,6 +468,17 @@ bool gem_identify_live(const gem_features_t *f, gem_result_t *out)
     return true;
 }
 
+static void fill_trained_result(const float *scores, gem_result_t *out)
+{
+    const int n = gem_ai_label_count() < GEM_MAX_LABELS ? gem_ai_label_count() : GEM_MAX_LABELS;
+    for (int i = 0; i < n; i++) {
+        strlcpy(out->scores[i].label, gem_ai_label(i), GEM_LABEL_LEN);
+        out->scores[i].score = scores[i];
+    }
+    out->nscores = n;
+    finish_result(out);
+}
+
 static esp_err_t identify_trained(gem_result_t *out)
 {
     memset(out, 0, sizeof(*out));
@@ -495,15 +506,47 @@ static esp_err_t identify_trained(gem_result_t *out)
     if (err != ESP_OK) {
         return err;
     }
-
-    const int n = gem_ai_label_count() < GEM_MAX_LABELS ? gem_ai_label_count() : GEM_MAX_LABELS;
-    for (int i = 0; i < n; i++) {
-        strlcpy(out->scores[i].label, gem_ai_label(i), GEM_LABEL_LEN);
-        out->scores[i].score = scores[i];
-    }
-    out->nscores = n;
-    finish_result(out);
+    fill_trained_result(scores, out);
     ESP_LOGI(TAG, "inference took %d ms", ai_ms);
+    return ESP_OK;
+}
+
+esp_err_t gem_classify_jpeg(const uint8_t *jpg, size_t len, gem_result_t *out,
+                            uint8_t *input, size_t input_size, int *input_w, int *input_h)
+{
+    memset(out, 0, sizeof(*out));
+    out->mode = GEM_MODE_TRAINED;
+    float scores[GEM_MAX_LABELS];
+    int ai_ms = 0;
+    const int64_t t0 = esp_timer_get_time();
+
+    // s_rgb is shared with the camera path, so this runs under the same lock
+    gem_camera_lock();
+    esp_err_t err = decode(jpg, len);
+    if (err == ESP_OK) {
+        err = gem_ai_classify(s_rgb, s_rgb_w, s_rgb_h, scores, &ai_ms);
+    }
+    if (err == ESP_OK && input) {
+        int w, h;
+        const uint8_t *in = gem_ai_last_input(&w, &h);
+        const size_t n = (size_t)w * h * 3;
+        if (!in || n > input_size) {
+            err = ESP_ERR_INVALID_SIZE;
+        } else {
+            memcpy(input, in, n);
+            *input_w = w;
+            *input_h = h;
+        }
+    }
+    const int dw = s_rgb_w, dh = s_rgb_h;
+    gem_camera_unlock();
+    if (err != ESP_OK) {
+        return err;
+    }
+    fill_trained_result(scores, out);
+    out->ms = (esp_timer_get_time() - t0) / 1000;
+    ESP_LOGI(TAG, "uploaded %u-byte JPEG decoded to %dx%d: %s %.0f%% (%d ms inference)",
+             (unsigned)len, dw, dh, out->label, out->confidence * 100, ai_ms);
     return ESP_OK;
 }
 

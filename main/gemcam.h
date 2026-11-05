@@ -83,6 +83,12 @@ bool gem_identify_live(const gem_features_t *f, gem_result_t *out);
 // Capture + identify with the current mode + remember + show;
 // ESP_ERR_NOT_FOUND when the live demo has nothing taught yet
 esp_err_t gem_identify_now(gem_result_t *out);
+// Runs the trained model on an uploaded JPEG through exactly the same decode,
+// crop and resize as a camera frame. Doesn't change the last result.
+// If `input` is given, also copies the RGB888 image the model saw into it
+// (needs input_w * input_h * 3 bytes; 96x96 is 27648).
+esp_err_t gem_classify_jpeg(const uint8_t *jpg, size_t len, gem_result_t *out,
+                            uint8_t *input, size_t input_size, int *input_w, int *input_h);
 // Runs the AI model once and logs the result and timing (first runs are slow)
 void gem_ai_warmup(void);
 // The most recent result from any source (web page or BOOT button)
